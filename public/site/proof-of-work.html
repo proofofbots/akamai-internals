@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Proof of work - Akamai Bot Manager internals</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">Akamai Bot Manager internals</a>
+  <span class="tagline">Measured notes on the sensor, the payload and the edge</span>
+</header>
+<div class="shell">
+<nav class="sidebar">
+<div class="group"><span class="group-title">Start here</span>
+<ul>
+<li class=""><a href="index.html">Overview</a></li>
+<li class=""><a href="edge-surface.html">Edge surface</a></li>
+<li class=""><a href="configuration.html">Script URL configuration</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The client</span>
+<ul>
+<li class=""><a href="sensor-script.html">The sensor script</a></li>
+<li class=""><a href="collection.html">What the sensor collects</a></li>
+<li class=""><a href="pixel-challenge.html">The pixel challenge</a></li>
+<li class="active"><a href="proof-of-work.html">Proof of work</a>
+<ul class="sub"><li><a href="#where-the-challenge-comes-from">Where the challenge comes from</a></li><li><a href="#the-work">The work</a></li><li><a href="#the-answer">The answer</a></li><li><a href="#status">Status</a></li></ul></li>
+</ul></div>
+<div class="group"><span class="group-title">The payload</span>
+<ul>
+<li class=""><a href="payload-format.html">sensor_data format</a></li>
+<li class=""><a href="build-generations.html">Build generations</a></li>
+<li class=""><a href="field-map.html">Where fields come from</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Detection</span>
+<ul>
+<li class=""><a href="automation-markers.html">Automation markers</a></li>
+<li class=""><a href="driven-input.html">Driven input tells</a></li>
+<li class=""><a href="transport.html">Transport fingerprints</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Working with it</span>
+<ul>
+<li class=""><a href="oracles.html">Oracles</a></li>
+<li class=""><a href="rotation.html">What rotates</a></li>
+<li class=""><a href="methodology.html">Methodology</a></li>
+</ul></div>
+</nav>
+<main>
+<h1 id="proof-of-work">Proof of work</h1>
+<p>The sensor carries its own proof-of-work client. There is no separate script and no separate endpoint: the challenge arrives inside the <code>_abck</code> cookie and the answer goes back inside the payload.</p>
+<h2 id="where-the-challenge-comes-from">Where the challenge comes from</h2>
+<p><code>_abck</code> field 4 carries the work items, several of them separated by <code>||</code>, each <code>-</code>-separated:</p>
+<pre class="highlight"><code class="lang-text"><span class="hl-nv">&lt;id&gt;</span>-<span class="hl-nv">&lt;salt&gt;</span>-<span class="hl-nv">&lt;difficulty&gt;</span>-<span class="hl-nv">&lt;delay&gt;</span>-<span class="hl-nv">&lt;slice&gt;</span>[-<span class="hl-nv">&lt;version&gt;</span>]</code></pre>
+<pre class="highlight"><code class="lang-js"><span class="hl-k">const</span> challengesFromAbck <span class="hl-o">=</span> <span class="hl-p">(</span>value<span class="hl-p">)</span> <span class="hl-o">=&gt;</span> <span class="hl-p">{</span>
+  <span class="hl-k">const</span> fields <span class="hl-o">=</span> <span class="hl-nf">decodeURIComponent</span><span class="hl-p">(</span><span class="hl-nf">String</span><span class="hl-p">(</span>value<span class="hl-p">)</span><span class="hl-p">)</span><span class="hl-p">.</span><span class="hl-nf">split</span><span class="hl-p">(</span><span class="hl-s">"~"</span><span class="hl-p">)</span><span class="hl-p">;</span>
+  <span class="hl-k">if</span> <span class="hl-p">(</span>fields<span class="hl-p">.</span>length <span class="hl-o">&lt;</span> <span class="hl-m">5</span><span class="hl-p">)</span> <span class="hl-k">return</span> <span class="hl-p">[</span><span class="hl-p">]</span><span class="hl-p">;</span>
+
+  <span class="hl-k">return</span> fields<span class="hl-p">[</span><span class="hl-m">4</span><span class="hl-p">]</span><span class="hl-p">.</span><span class="hl-nf">split</span><span class="hl-p">(</span><span class="hl-s">"||"</span><span class="hl-p">)</span><span class="hl-p">.</span><span class="hl-nf">map</span><span class="hl-p">(</span><span class="hl-c">/* id, salt, difficulty, delay, slice, version */</span><span class="hl-p">)</span><span class="hl-p">;</span>
+<span class="hl-p">}</span><span class="hl-p">;</span></code></pre>
+<p>Items are taken with version 2 preferred over version 1. The token used in the prefix is <code>_abck</code> field 0, not the work item.</p>
+<p><code>delay</code> and <code>slice</code> are pacing, not difficulty: the first round starts after <code>delay</code> milliseconds, and the search yields to the event loop every 1000 attempts once it has spent more than <code>slice</code> milliseconds.</p>
+<h2 id="the-work">The work</h2>
+<p>Ten rounds. Round <code>n</code> uses <code>difficulty + n</code> as its modulus and searches for a nonce such that the SHA-256 of the message, read as a big-endian integer, is <code>0</code> modulo that value.</p>
+<pre class="highlight"><code class="lang-js"><span class="hl-k">const</span> prefix <span class="hl-o">=</span> <span class="hl-s">`${challenge.token}${startTs}${challenge.salt}`</span><span class="hl-p">;</span>
+<span class="hl-k">const</span> message <span class="hl-o">=</span> <span class="hl-s">`${prefix}${difficulty}${nonce}`</span><span class="hl-p">;</span>
+
+<span class="hl-k">const</span> remainder <span class="hl-o">=</span> <span class="hl-p">(</span>bytes<span class="hl-p">,</span> modulus<span class="hl-p">)</span> <span class="hl-o">=&gt;</span> <span class="hl-p">{</span>
+  <span class="hl-k">let</span> value <span class="hl-o">=</span> <span class="hl-m">0</span><span class="hl-p">;</span>
+  <span class="hl-k">for</span> <span class="hl-p">(</span><span class="hl-k">const</span> byte <span class="hl-k">of</span> bytes<span class="hl-p">)</span> <span class="hl-p">{</span>
+    value <span class="hl-o">=</span> <span class="hl-p">(</span><span class="hl-p">(</span>value <span class="hl-o">&lt;&lt;</span> <span class="hl-m">8</span><span class="hl-p">)</span> <span class="hl-o">|</span> byte<span class="hl-p">)</span> <span class="hl-o">&gt;&gt;&gt;</span> <span class="hl-m">0</span><span class="hl-p">;</span>
+    value <span class="hl-o">%=</span> modulus<span class="hl-p">;</span>
+  <span class="hl-p">}</span>
+  <span class="hl-k">return</span> value<span class="hl-p">;</span>
+<span class="hl-p">}</span><span class="hl-p">;</span></code></pre>
+<p><code>bmak.startTs</code> is published on <code>window</code>, so the entire prefix is observable from the page. The nonce the sensor tries is <code>Math.random().toString(16)</code>, so a solver is free to enumerate instead. Expected work is one hash per <code>difficulty</code> attempts, which puts a difficulty of a few hundred at a few hundred hashes, single-digit milliseconds for three rounds.</p>
+<h2 id="the-answer">The answer</h2>
+<p>Four <code>;</code>-separated lists, in order: the nonces, the milliseconds per round, the attempts per round, and a trace filled only on the first round.</p>
+<pre class="highlight"><code class="lang-text"><span class="hl-nv">&lt;nonces&gt;</span><span class="hl-p">,</span>… <span class="hl-p">;</span> <span class="hl-nv">&lt;ms per round&gt;</span><span class="hl-p">,</span>… <span class="hl-p">;</span> <span class="hl-nv">&lt;attempts per round&gt;</span><span class="hl-p">,</span>… <span class="hl-p">;</span> <span class="hl-nv">&lt;trace&gt;</span><span class="hl-p">,</span>… <span class="hl-p">;</span></code></pre>
+<p>The trace carries the salt, <code>startTs</code>, the challenge string, the prefix, the difficulty, the round modulus, the nonce, the message, the hash and the elapsed time since <code>startTs</code>. In other words the client reports how long its own CPU took, per round, alongside the answer.</p>
+<p><strong>How it is detected:</strong> the timing lists are as much of the answer as the nonces are. A solver that finishes ten rounds far faster than the hardware it claims to be, or that reports attempt counts inconsistent with the stated difficulty, is describing a machine that does not exist. The same problem appears in a different form for anyone running the sensor outside a browser: see the initialisation cost in <a href="methodology.html">methodology</a>.</p>
+<h2 id="status">Status</h2>
+<p>The parse, the search and the answer format are implemented and self-consistent, but no property sampled has ever asked for work. The proof-of-work config bit was <code>0</code> on every host with a real obfuscated sensor path in every sweep so far, and <code>_abck</code> field 4 has been <code>-1</code> on all of them, so the round trip through a real edge is untested.</p>
+<div class="pager"><a class="prev" href="pixel-challenge.html">The pixel challenge</a>
+<a class="next" href="payload-format.html">sensor_data format</a></div>
+</main>
+</div>
+<div class="footer-content">
+Measured against live builds. Formats and constants rotate per build; re-measure before relying on any number here.
+</div>
+</body>
+</html>

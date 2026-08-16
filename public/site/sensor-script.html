@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The sensor script - Akamai Bot Manager internals</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">Akamai Bot Manager internals</a>
+  <span class="tagline">Measured notes on the sensor, the payload and the edge</span>
+</header>
+<div class="shell">
+<nav class="sidebar">
+<div class="group"><span class="group-title">Start here</span>
+<ul>
+<li class=""><a href="index.html">Overview</a></li>
+<li class=""><a href="edge-surface.html">Edge surface</a></li>
+<li class=""><a href="configuration.html">Script URL configuration</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The client</span>
+<ul>
+<li class="active"><a href="sensor-script.html">The sensor script</a>
+<ul class="sub"><li><a href="#obfuscation-shape">Obfuscation shape</a></li><li><a href="#the-integrity-signature">The integrity signature</a></li><li><a href="#do-not-fold-the-strings-before-tracing">Do not fold the strings before tracing</a></li><li><a href="#the-runtime-surface">The runtime surface</a></li></ul></li>
+<li class=""><a href="collection.html">What the sensor collects</a></li>
+<li class=""><a href="pixel-challenge.html">The pixel challenge</a></li>
+<li class=""><a href="proof-of-work.html">Proof of work</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The payload</span>
+<ul>
+<li class=""><a href="payload-format.html">sensor_data format</a></li>
+<li class=""><a href="build-generations.html">Build generations</a></li>
+<li class=""><a href="field-map.html">Where fields come from</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Detection</span>
+<ul>
+<li class=""><a href="automation-markers.html">Automation markers</a></li>
+<li class=""><a href="driven-input.html">Driven input tells</a></li>
+<li class=""><a href="transport.html">Transport fingerprints</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Working with it</span>
+<ul>
+<li class=""><a href="oracles.html">Oracles</a></li>
+<li class=""><a href="rotation.html">What rotates</a></li>
+<li class=""><a href="methodology.html">Methodology</a></li>
+</ul></div>
+</nav>
+<main>
+<h1 id="the-sensor-script">The sensor script</h1>
+<p>Roughly 210 KB on one line for the generation 2 build tracked here, 556 KB to 600 KB for generation 3 builds. The whole thing is one self-calling wrapper.</p>
+<pre class="highlight"><code class="lang-js"><span class="hl-p">(</span><span class="hl-k">function</span> <span class="hl-nf">qRgxPcXAER</span><span class="hl-p">(</span><span class="hl-p">)</span><span class="hl-p">{</span><span class="hl-nf">MT</span><span class="hl-p">(</span><span class="hl-p">)</span><span class="hl-p">;</span><span class="hl-m">0xcff0cc1</span><span class="hl-p">,</span><span class="hl-m">2656862855</span><span class="hl-p">;</span><span class="hl-nf">M2T</span><span class="hl-p">(</span><span class="hl-p">)</span><span class="hl-p">;</span><span class="hl-nf">f2T</span><span class="hl-p">(</span><span class="hl-p">)</span><span class="hl-p">;</span>…<span class="hl-p">}</span><span class="hl-p">(</span><span class="hl-p">)</span><span class="hl-p">)</span><span class="hl-p">;</span></code></pre>
+<h2 id="obfuscation-shape">Obfuscation shape</h2>
+<p>Every identifier is two or three characters, and the top level of one build parses to 1,453 names. Control flow is flattened: most work happens inside <code>while (state != K) switch (state) { case A: … }</code> dispatchers whose case labels are computed at load from arithmetic over other mangled variables. Most named functions are trampolines into one of those dispatchers.</p>
+<pre class="highlight"><code class="lang-js"><span class="hl-k">function</span> <span class="hl-nf">xY</span><span class="hl-p">(</span><span class="hl-p">)</span><span class="hl-p">{</span> <span class="hl-k">return</span> hH<span class="hl-p">.</span><span class="hl-nf">apply</span><span class="hl-p">(</span><span class="hl-kc">this</span><span class="hl-p">,</span> <span class="hl-p">[</span><span class="hl-m">0x3f</span><span class="hl-p">,</span> arguments<span class="hl-p">]</span><span class="hl-p">)</span><span class="hl-p">;</span> <span class="hl-p">}</span></code></pre>
+<p>Two structures carry the meaning. One is a global-object handle resolved once at startup and then indexed with decoded strings, so every global the script touches goes through it. The other is a table of string thunks: call sites look like <code>TT.ZO.apply(null, [sJ, Xm, JJ])</code>, the arguments select the string, and the thunk memoises itself on first call by overwriting its own slot.</p>
+<p>The raw strings live in around a dozen escape-heavy arrays. They decode lazily and only on demand, so a static pass over the arrays yields nothing readable, and extraction has to be dynamic.</p>
+<h2 id="the-integrity-signature">The integrity signature</h2>
+<p>The first statement of the wrapper is a bare expression, <code>0xcff0cc1,2656862855;</code>. It is not dead code, it is the signature. The check takes the script's own source through <code>Function.prototype.toString</code>, cuts the marker out of it, appends <code>typeof window["&lt;wrapper name&gt;"]</code> (which is <code>"undefined"</code>, because a named function expression creates no global), hashes that, and subtracts the hash from the stored constant.</p>
+<p>The hash is MurmurHash3 x86 32-bit with a per-build seed, over UTF-16 code units, skipping <code>\n</code>, <code>\r</code> and space:</p>
+<pre class="highlight"><code class="lang-js"><span class="hl-k">for</span> <span class="hl-p">(</span><span class="hl-k">let</span> index <span class="hl-o">=</span> <span class="hl-m">0</span><span class="hl-p">;</span> index <span class="hl-o">&lt;</span> text<span class="hl-p">.</span>length<span class="hl-p">;</span> index <span class="hl-o">+=</span> <span class="hl-m">1</span><span class="hl-p">)</span> <span class="hl-p">{</span>
+  <span class="hl-k">const</span> code <span class="hl-o">=</span> text<span class="hl-p">.</span><span class="hl-nf">charCodeAt</span><span class="hl-p">(</span>index<span class="hl-p">)</span><span class="hl-p">;</span>
+  <span class="hl-k">if</span> <span class="hl-p">(</span>code <span class="hl-o">===</span> <span class="hl-m">10</span> <span class="hl-o">||</span> code <span class="hl-o">===</span> <span class="hl-m">13</span> <span class="hl-o">||</span> code <span class="hl-o">===</span> <span class="hl-m">32</span><span class="hl-p">)</span> <span class="hl-k">continue</span><span class="hl-p">;</span>
+  <span class="hl-c">/* standard murmur3 body, 0xcc9e2d51 / 0x1b873593 */</span>
+<span class="hl-p">}</span></code></pre>
+<p>Skipping whitespace means reformatting the script does not break the signature. Changing one non-whitespace character does.</p>
+<p>The result is not a boolean. It is folded into the string decoder's index arithmetic, so a wrong value does not raise: it silently decodes every string to the wrong value, the script keeps running, and it dies much later somewhere unrelated. That delay is the whole point of the design.</p>
+<p>The expected result is also not zero. On the build tracked, the stored constant is 2,656,862,855, the hash of its own body is 2,656,862,384, and the difference the decoder expects is <strong>471</strong>. The check is not "hash must match", it is "hash must be off by exactly the amount the decoder expects".</p>
+<p>Because the marker is excised before hashing, the constant can be recomputed for an edited script:</p>
+<pre class="highlight"><code class="lang-text"><span class="hl-na">delta</span>  = stored - murmur(original body)
+<span class="hl-na">stored</span> = murmur(edited body) + delta</code></pre>
+<p>Re-signing after an edit reproduces the same delta, which is one of the offline regression checks. Locating the pieces is by shape, not by name: the named function expression, the <code>0x&lt;hex&gt;,&lt;decimal&gt;;</code> marker, a function body containing <code>0xcc9e2d51</code>, and the literal seed passed to it.</p>
+<p><strong>How it is detected:</strong> any patch that changes a non-whitespace byte without re-signing corrupts every decoded string. Patching the string table without fixing the signature yields strings like <code>"8P/6S"</code> where <code>"prototype"</code> belongs, and the run fails deep inside with <code>Cannot set properties of undefined</code>.</p>
+<p>The check also runs continuously. On a clean load, <code>Function.prototype.toString</code> is called 34 times, every one of them on the wrapper.</p>
+<h2 id="do-not-fold-the-strings-before-tracing">Do not fold the strings before tracing</h2>
+<p>Replacing each decoder call with the string it returned produces a much more readable script that does not work. Both generations decode with a stateful decoder, so removing a call changes what later calls return. On one build the folded script runs without throwing and silently stops posting; on another it throws outright. Instrument the script exactly as served and read the decoder output from the recording instead.</p>
+<h2 id="the-runtime-surface">The runtime surface</h2>
+<p>For all of the obfuscation, a small object is published on <code>window</code>:</p>
+<pre class="highlight"><code class="lang-text">bmak.firstLoad      boolean
+bmak.form_submit    function
+bmak.get_telemetry  function
+bmak.listFunctions  object
+bmak.applyFunc      function
+bmak.startTs        number<span class="hl-p">,</span> ms epoch of script start</code></pre>
+<p><code>window._sdTrace</code> holds a trace string, <code>&lt;init/&gt;</code> on a clean load. If the payload builder throws, the exception stack goes into that trace and into the payload as its own section, so a payload carrying it is a payload from a client that broke.</p>
+<p><code>listFunctions</code> is the registry the URL config bits drive:</p>
+<pre class="highlight"><code class="lang-text">_setFsp  _setBm  _setAu  _setPowState  _setIpr  _setAkid  _fetchParams</code></pre>
+<p><code>get_telemetry()</code> returns <code>a=&lt;token&gt;&amp;&amp;&amp;e=&lt;base64&gt;</code> on builds that post by themselves. On builds that do not, it returns the full telemetry header including the payload, around 4.5 KB to 4.9 KB, which is what the page's own script sends in a request header.</p>
+<p><strong>How it is detected:</strong> these two build shapes need different harnesses. A run that waits for a <code>sensor_data</code> POST will wait forever on a build that only exposes <code>get_telemetry</code>, and conclude wrongly that the script did not run. Both shapes were observed on the same brand, one per host.</p>
+<div class="pager"><a class="prev" href="configuration.html">Script URL configuration</a>
+<a class="next" href="collection.html">What the sensor collects</a></div>
+</main>
+</div>
+<div class="footer-content">
+Measured against live builds. Formats and constants rotate per build; re-measure before relying on any number here.
+</div>
+</body>
+</html>

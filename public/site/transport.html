@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transport fingerprints - Akamai Bot Manager internals</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">Akamai Bot Manager internals</a>
+  <span class="tagline">Measured notes on the sensor, the payload and the edge</span>
+</header>
+<div class="shell">
+<nav class="sidebar">
+<div class="group"><span class="group-title">Start here</span>
+<ul>
+<li class=""><a href="index.html">Overview</a></li>
+<li class=""><a href="edge-surface.html">Edge surface</a></li>
+<li class=""><a href="configuration.html">Script URL configuration</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The client</span>
+<ul>
+<li class=""><a href="sensor-script.html">The sensor script</a></li>
+<li class=""><a href="collection.html">What the sensor collects</a></li>
+<li class=""><a href="pixel-challenge.html">The pixel challenge</a></li>
+<li class=""><a href="proof-of-work.html">Proof of work</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The payload</span>
+<ul>
+<li class=""><a href="payload-format.html">sensor_data format</a></li>
+<li class=""><a href="build-generations.html">Build generations</a></li>
+<li class=""><a href="field-map.html">Where fields come from</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Detection</span>
+<ul>
+<li class=""><a href="automation-markers.html">Automation markers</a></li>
+<li class=""><a href="driven-input.html">Driven input tells</a></li>
+<li class="active"><a href="transport.html">Transport fingerprints</a>
+<ul class="sub"><li><a href="#ja3-is-not-stable-for-chrome-ja4-is">JA3 is not stable for Chrome, JA4 is</a></li><li><a href="#what-closes-the-gap">What closes the gap</a></li><li><a href="#caveats">Caveats</a></li></ul></li>
+</ul></div>
+<div class="group"><span class="group-title">Working with it</span>
+<ul>
+<li class=""><a href="oracles.html">Oracles</a></li>
+<li class=""><a href="rotation.html">What rotates</a></li>
+<li class=""><a href="methodology.html">Methodology</a></li>
+</ul></div>
+</nav>
+<main>
+<h1 id="transport-fingerprints">Transport fingerprints</h1>
+<p>Akamai grades the connection before it grades the payload. A perfect <code>sensor_data</code> over a stock Node socket is a bot with a good payload, and the decision was already made.</p>
+<p>The numbers below were measured by taking the ClientHello off the wire on a local TLS server, completing the handshake, answering the HTTP/2 request and reporting the fingerprints. Chrome 151 headless and Node's <code>http2</code> client, against the same server:</p>
+<table>
+<thead><tr><th></th><th>Chrome</th><th>Node</th></tr></thead>
+<tbody>
+<tr><td>cipher suites</td><td>16, one GREASE</td><td>52, no GREASE</td></tr>
+<tr><td>extensions</td><td>18, two GREASE</td><td>12, no GREASE</td></tr>
+<tr><td>ALPN offered</td><td><code>h2</code>, <code>http/1.1</code></td><td><code>h2</code></td></tr>
+<tr><td>JA3</td><td><code>75a6d12708aa584ed06f0e4da0c1fcf2</code></td><td><code>983846581fdb62fafdb21d2282592c57</code></td></tr>
+<tr><td>JA4</td><td><code>t13d1516h2_8daaf6152771_806a8c22fdea</code></td><td><code>t13d5212h2_b262b3658495_8e6e362c5eac</code></td></tr>
+<tr><td>HTTP/2</td><td><code>1:65536;2:0;4:6291456;6:262144|15663105|1:1:0:256,3:1:0:220|m,a,s,p</code></td><td><code>|00|0|p,m,a,s</code></td></tr>
+</tbody>
+</table>
+<p>Every column differs, and each difference classifies on its own.</p>
+<ul>
+<li><strong>Cipher count.</strong> 16 against 52. Node offers the OpenSSL default list; Chrome offers a short fixed list in a fixed order.</li>
+<li><strong>GREASE.</strong> Chrome inserts one GREASE cipher and two GREASE extensions, at positions that move per connection. Node inserts none. Absence of GREASE is a single-bit tell.</li>
+<li><strong>HTTP/2 SETTINGS.</strong> Chrome sends <code>HEADER_TABLE_SIZE=65536</code>, <code>ENABLE_PUSH=0</code>, <code>INITIAL_WINDOW_SIZE=6291456</code>, <code>MAX_HEADER_LIST_SIZE=262144</code>, in that order, with no <code>MAX_CONCURRENT_STREAMS</code>, then a connection <code>WINDOW_UPDATE</code> of 15,663,105. Node sends an empty SETTINGS frame and no WINDOW_UPDATE at all.</li>
+<li><strong>Priority.</strong> Chrome attaches priority information to its request headers. Node sends none.</li>
+<li><strong>Pseudo-header order.</strong> Chrome sends <code>:method, :authority, :scheme, :path</code>. Node sends <code>:path, :method, :authority, :scheme</code>. Akamai's own published HTTP/2 fingerprint format is exactly <code>SETTINGS|WINDOW_UPDATE|PRIORITY|pseudo-header order</code>, so this is graded explicitly rather than incidentally.</li>
+</ul>
+<h2 id="ja3-is-not-stable-for-chrome-ja4-is">JA3 is not stable for Chrome, JA4 is</h2>
+<p>The Chrome JA3 above differs from the value the same browser produced on the same machine a day earlier, while the JA4 cipher hash <code>8daaf6152771</code> is unchanged and is the value Chrome is known to produce.</p>
+<p>GREASE values and extension order are randomised per connection by design, so a JA3 taken raw is a moving target unless GREASE is stripped first. Treat a JA3 mismatch across two of your own runs as normal, and prefer JA4 or an explicit field-by-field comparison when you need something to hold still.</p>
+<h2 id="what-closes-the-gap">What closes the gap</h2>
+<p>Reproducing the payload is the smaller half. A client posting <code>sensor_data</code> without reproducing the handshake needs one of:</p>
+<ul>
+<li>a real browser as the transport, which is the only way to attribute a failure to the payload rather than the socket;</li>
+<li>a TLS stack with per-field control over the ClientHello and an HTTP/2 implementation with control over SETTINGS order, WINDOW_UPDATE and pseudo-header order;</li>
+<li>a proxy that rewrites the handshake underneath an ordinary HTTP client.</li>
+</ul>
+<p>The second is what the browserless client here uses, wrapping a Chrome-profile TLS library with extension order randomisation left on:</p>
+<pre class="highlight"><code class="lang-js"><span class="hl-k">const</span> session <span class="hl-o">=</span> <span class="hl-k">new</span> <span class="hl-nf">Session</span><span class="hl-p">(</span><span class="hl-p">{</span>
+  <span class="hl-na">clientIdentifier</span><span class="hl-p">:</span> ClientIdentifier<span class="hl-p">[</span>profile<span class="hl-p">]</span><span class="hl-p">,</span>
+  timeout<span class="hl-p">,</span>
+  <span class="hl-na">insecureSkipVerify</span><span class="hl-p">:</span> <span class="hl-kc">false</span><span class="hl-p">,</span>
+  <span class="hl-na">randomTlsExtensionOrder</span><span class="hl-p">:</span> <span class="hl-kc">true</span><span class="hl-p">,</span>
+<span class="hl-p">}</span><span class="hl-p">)</span><span class="hl-p">;</span></code></pre>
+<p><strong>How it is detected:</strong> measured directly against a production API that judges the payload in a request header, plain Node <code>fetch</code> is refused with a header the edge had accepted from a browser moments earlier, while the same header over the impersonating stack is served. Nothing else about the request changed. Header order and casing sit on top of all this and are the part that gets attention first and buys the least.</p>
+<h2 id="caveats">Caveats</h2>
+<p>These are one Chrome build on macOS, first request on a fresh connection. Chrome's later requests on the same connection carry different priority information, so a client compared mid-connection will not match a first-request reference.</p>
+<div class="pager"><a class="prev" href="driven-input.html">Driven input tells</a>
+<a class="next" href="oracles.html">Oracles</a></div>
+</main>
+</div>
+<div class="footer-content">
+Measured against live builds. Formats and constants rotate per build; re-measure before relying on any number here.
+</div>
+</body>
+</html>

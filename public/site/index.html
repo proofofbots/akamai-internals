@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Overview - Akamai Bot Manager internals</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">Akamai Bot Manager internals</a>
+  <span class="tagline">Measured notes on the sensor, the payload and the edge</span>
+</header>
+<div class="shell">
+<nav class="sidebar">
+<div class="group"><span class="group-title">Start here</span>
+<ul>
+<li class="active"><a href="index.html">Overview</a>
+<ul class="sub"><li><a href="#what-runs-on-the-page">What runs on the page</a></li><li><a href="#the-verdict-is-layered">The verdict is layered</a></li><li><a href="#reading-order">Reading order</a></li><li><a href="#scope">Scope</a></li></ul></li>
+<li class=""><a href="edge-surface.html">Edge surface</a></li>
+<li class=""><a href="configuration.html">Script URL configuration</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The client</span>
+<ul>
+<li class=""><a href="sensor-script.html">The sensor script</a></li>
+<li class=""><a href="collection.html">What the sensor collects</a></li>
+<li class=""><a href="pixel-challenge.html">The pixel challenge</a></li>
+<li class=""><a href="proof-of-work.html">Proof of work</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The payload</span>
+<ul>
+<li class=""><a href="payload-format.html">sensor_data format</a></li>
+<li class=""><a href="build-generations.html">Build generations</a></li>
+<li class=""><a href="field-map.html">Where fields come from</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Detection</span>
+<ul>
+<li class=""><a href="automation-markers.html">Automation markers</a></li>
+<li class=""><a href="driven-input.html">Driven input tells</a></li>
+<li class=""><a href="transport.html">Transport fingerprints</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Working with it</span>
+<ul>
+<li class=""><a href="oracles.html">Oracles</a></li>
+<li class=""><a href="rotation.html">What rotates</a></li>
+<li class=""><a href="methodology.html">Methodology</a></li>
+</ul></div>
+</nav>
+<main>
+<h1 id="akamai-bot-manager-internals">Akamai Bot Manager internals</h1>
+<p>Akamai Bot Manager runs at the CDN edge. There is no third-party origin: the sensor script, the telemetry sink, the pixel challenge and any interstitial come from the customer's own hostname, injected or proxied by the edge. Identifying it on a page is a matter of URL shape, cookie shape and script content, never a vendor domain.</p>
+<p>These pages describe what the client does and how the edge answers, measured against live builds. Numbers come from decoded payloads, instrumented runs and requests sent to production endpoints. Where a claim is inference rather than measurement, it says so.</p>
+<p>Hostnames, cookie values, API keys and script paths are redacted. Formats, field names, constants and algorithms are not: they are the useful part, and they rotate per build anyway.</p>
+<h2 id="what-runs-on-the-page">What runs on the page</h2>
+<table>
+<thead><tr><th>piece</th><th>what it is</th></tr></thead>
+<tbody>
+<tr><td>sensor</td><td>a large obfuscated script that instruments the page and produces <code>sensor_data</code>, either posting it itself or handing it to the page through <code>bmak.get_telemetry()</code></td></tr>
+<tr><td>pixel challenge</td><td>a small separate client seeded by an inline <code>bazadebezolkohpepadr</code> integer, posting an unencrypted form body</td></tr>
+<tr><td><code>sec-cpt</code></td><td>a proof-of-work interstitial, configured through the sensor rather than as its own client</td></tr>
+</tbody>
+</table>
+<p>A protected document usually carries several tags at once:</p>
+<pre class="highlight"><code class="lang-html"><span class="hl-p">&lt;</span><span class="hl-nt">script</span> <span class="hl-na">src</span><span class="hl-o">=</span><span class="hl-s">"/GcvTpQmXd/PWnq4Rt/8k/&lt;config-segment&gt;/Zr91ke2sqA/LxNU/Qj4PH2sB"</span><span class="hl-p">&gt;</span><span class="hl-p">&lt;/</span><span class="hl-nt">script</span><span class="hl-p">&gt;</span>
+<span class="hl-p">&lt;</span><span class="hl-nt">script</span><span class="hl-p">&gt;</span>bazadebezolkohpepadr="1320943881"<span class="hl-p">&lt;/</span><span class="hl-nt">script</span><span class="hl-p">&gt;</span>
+<span class="hl-p">&lt;</span><span class="hl-nt">script</span> <span class="hl-na">src</span><span class="hl-o">=</span><span class="hl-s">"/akam/13/4ebc0144"</span><span class="hl-p">&gt;</span><span class="hl-p">&lt;/</span><span class="hl-nt">script</span><span class="hl-p">&gt;</span>
+<span class="hl-p">&lt;</span><span class="hl-nt">script</span> <span class="hl-na">src</span><span class="hl-o">=</span><span class="hl-s">"/akam/13/pixel_4ebc0144?a=&lt;base64&gt;"</span><span class="hl-p">&gt;</span><span class="hl-p">&lt;/</span><span class="hl-nt">script</span><span class="hl-p">&gt;</span></code></pre>
+<p>The opaque multi-segment path is the live sensor on current configurations. The <code>/akam/&lt;generation&gt;/&lt;hash&gt;</code> pair is the older delivery style; on several properties it is the pixel client only, and on others it is inert.</p>
+<h2 id="the-verdict-is-layered">The verdict is layered</h2>
+<p>The edge does not make one decision, it makes four, in order:</p>
+<ul>
+<li><strong>Connection.</strong> TLS ClientHello and the HTTP/2 preface are graded before any JavaScript runs. Node's stock TLS stack is separable from Chrome's on cipher count, GREASE and SETTINGS alone. See <a href="transport.html">transport fingerprints</a>.</li>
+<li><strong>Document.</strong> Cookie issuance already differs by client before a script has executed.</li>
+<li><strong>Payload.</strong> The edge decrypts <code>sensor_data</code>, applies this build's field permutation and reads the contents. A payload with a moved substitution key, or one re-encoded without the permutation, is refused where the same bytes correctly built are served. See <a href="oracles.html">oracles</a>.</li>
+<li><strong>Reputation and state.</strong> Some endpoints cache, and some grant an address slack after they have served it, which makes naive A/B measurement lie. See <a href="rotation.html">what rotates</a>.</li>
+</ul>
+<h2 id="reading-order">Reading order</h2>
+<p>Read <a href="edge-surface.html">edge surface</a> to know what you are looking at, then <a href="payload-format.html">sensor_data format</a> for how a payload is framed and encrypted, then <a href="oracles.html">oracles</a> for how to tell whether anything you built was actually read. If the question is "what does this report about my automation", go straight to <a href="automation-markers.html">automation markers</a>.</p>
+<h2 id="scope">Scope</h2>
+<p>This is client-side observation of a defence: what the script reads, how it packages it, and what the edge does with the result. It is written for people building detection, testing properties they own, or trying to understand what a bot-management verdict is made of.</p>
+<div class="pager"><span></span>
+<a class="next" href="edge-surface.html">Edge surface</a></div>
+</main>
+</div>
+<div class="footer-content">
+Measured against live builds. Formats and constants rotate per build; re-measure before relying on any number here.
+</div>
+</body>
+</html>

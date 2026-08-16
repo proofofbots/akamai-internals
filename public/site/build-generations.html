@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Build generations - Akamai Bot Manager internals</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">Akamai Bot Manager internals</a>
+  <span class="tagline">Measured notes on the sensor, the payload and the edge</span>
+</header>
+<div class="shell">
+<nav class="sidebar">
+<div class="group"><span class="group-title">Start here</span>
+<ul>
+<li class=""><a href="index.html">Overview</a></li>
+<li class=""><a href="edge-surface.html">Edge surface</a></li>
+<li class=""><a href="configuration.html">Script URL configuration</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The client</span>
+<ul>
+<li class=""><a href="sensor-script.html">The sensor script</a></li>
+<li class=""><a href="collection.html">What the sensor collects</a></li>
+<li class=""><a href="pixel-challenge.html">The pixel challenge</a></li>
+<li class=""><a href="proof-of-work.html">Proof of work</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The payload</span>
+<ul>
+<li class=""><a href="payload-format.html">sensor_data format</a></li>
+<li class="active"><a href="build-generations.html">Build generations</a>
+<ul class="sub"><li><a href="#what-carries-over">What carries over</a></li><li><a href="#the-generation-3-shuffle-key">The generation 3 shuffle key</a></li><li><a href="#identify-builds-by-hash-not-by-url">Identify builds by hash, not by URL</a></li></ul></li>
+<li class=""><a href="field-map.html">Where fields come from</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Detection</span>
+<ul>
+<li class=""><a href="automation-markers.html">Automation markers</a></li>
+<li class=""><a href="driven-input.html">Driven input tells</a></li>
+<li class=""><a href="transport.html">Transport fingerprints</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Working with it</span>
+<ul>
+<li class=""><a href="oracles.html">Oracles</a></li>
+<li class=""><a href="rotation.html">What rotates</a></li>
+<li class=""><a href="methodology.html">Methodology</a></li>
+</ul></div>
+</nav>
+<main>
+<h1 id="build-generations">Build generations</h1>
+<p>Two generations are in production at once. They share the cipher core and almost nothing else.</p>
+<table>
+<thead><tr><th></th><th>generation 2</th><th>generation 3</th></tr></thead>
+<tbody>
+<tr><td>script size</td><td>209,799 bytes on the build tracked</td><td>556 KB to 600 KB</td></tr>
+<tr><td>wrapper</td><td>named function expression with an integrity marker as its first statement</td><td>anonymous IIFE with a polyfill prologue</td></tr>
+<tr><td>string table</td><td>runtime thunks that memoise themselves</td><td>array of two-character names at the end of the file</td></tr>
+<tr><td>header fields</td><td>5 posted, 4 through <code>get_telemetry</code></td><td>7</td></tr>
+<tr><td>plaintext</td><td>positional sections keyed by negative codes</td><td>one JSON object with named keys</td></tr>
+<tr><td>permutation separator</td><td><code>,</code></td><td><code>:</code></td></tr>
+<tr><td>shuffle key</td><td>in the header, in the clear</td><td>a constant inside the build</td></tr>
+<tr><td>checksum</td><td>preamble field 3, <code>sum(charCode &lt; 128) ^ 24</code></td><td>none</td></tr>
+</tbody>
+</table>
+<h2 id="what-carries-over">What carries over</h2>
+<p>The substitution is identical: same 92-character alphabet, same 23-bit LCG, same <code>(state &gt;&gt; 8) &amp; 0xffff</code> draw. Running it over a generation 3 body with the right key produces readable text, which is the strongest evidence the two share a cipher core even though the generation 3 source computes its constants rather than writing them as literals.</p>
+<p>The substitution key also comes from the same place in both: <code>bm_sz</code> segment 2, with <code>8888888</code> as the fallback when the cookie is missing.</p>
+<h2 id="the-generation-3-shuffle-key">The generation 3 shuffle key</h2>
+<p>This is the one real difference in kind. Generation 2 hands you the key in the header; generation 3 keeps it as a constant in the build's own string table, so a payload cannot be read without either recovering it or reading it out of the script.</p>
+<p>Recovery uses an anchor rather than a brute-force comparison. The plaintext is JSON, so token 0 after unshuffling is always <code>{"ver"</code>. For each candidate key, build the permutation, look at where index 0 lands, and check only that one token before doing any work:</p>
+<pre class="highlight"><code class="lang-js"><span class="hl-k">const</span> at <span class="hl-o">=</span> <span class="hl-nf">inverseIndexOfZero</span><span class="hl-p">(</span>order<span class="hl-p">)</span><span class="hl-p">;</span>
+<span class="hl-k">if</span> <span class="hl-p">(</span>at <span class="hl-o">===</span> <span class="hl-o">-</span><span class="hl-m">1</span> <span class="hl-o">||</span> parts<span class="hl-p">[</span>at<span class="hl-p">]</span> <span class="hl-o">!==</span> <span class="hl-s">'{"ver"'</span><span class="hl-p">)</span> <span class="hl-k">continue</span><span class="hl-p">;</span></code></pre>
+<p>Survivors are then validated by parsing the result as JSON and checking <code>ver</code> against the header token. Reading the key out of the build's recorded constants beats searching for it, and the search exists as the fallback.</p>
+<p>Two traps live here, both of which produced wrong write-ups before they were understood:</p>
+<ul>
+<li><strong>The key space is not 23 bits.</strong> Candidate constants are accepted over <code>[2^16, 2^25)</code>. One build's key was 8,647,519, larger than 2^23, so a sweep of the LCG's own state space could never have found it. The model was right and the range was wrong.</li>
+<li><strong>Two keys can both produce valid JSON.</strong> On one build, two keys in the 23-bit space produced JSON of the same length with the same 39 keys, differing only in which field landed where, 511 bytes in. Corroborating across a second payload from the same build settles it; guessing does not.</li>
+</ul>
+<p>Recovered keys are cached per build fingerprint, where the fingerprint is the adapter name, the token count and a hash of the sorted tokens, so it identifies the build's permutation rather than the session.</p>
+<p><strong>How it is detected:</strong> a payload that has not actually been decoded is easy to mistake for one that has. When no key can be settled, the safe behaviour is to refuse loudly rather than treat a still-shuffled body as plaintext. A comparison run against a still-shuffled body reads as though the edge accepted an unshuffled payload, which is the opposite of what is happening.</p>
+<h2 id="identify-builds-by-hash-not-by-url">Identify builds by hash, not by URL</h2>
+<p>Both generations rotate, and they rotate on different axes. Sampled at fifteen-minute intervals, two generation 3 properties served three distinct script hashes each inside 31 minutes, while a generation 2 build held one hash across an afternoon and still served the same hash the next day under a completely different URL path.</p>
+<p>So the URL is not the build and neither is it a version. A shuffle key read out of one fetch is worthless against a script fetched fifteen minutes later, and anything working against a live host has to fetch the script in the same session it uses it.</p>
+<div class="pager"><a class="prev" href="payload-format.html">sensor_data format</a>
+<a class="next" href="field-map.html">Where fields come from</a></div>
+</main>
+</div>
+<div class="footer-content">
+Measured against live builds. Formats and constants rotate per build; re-measure before relying on any number here.
+</div>
+</body>
+</html>

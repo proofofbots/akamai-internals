@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The pixel challenge - Akamai Bot Manager internals</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">Akamai Bot Manager internals</a>
+  <span class="tagline">Measured notes on the sensor, the payload and the edge</span>
+</header>
+<div class="shell">
+<nav class="sidebar">
+<div class="group"><span class="group-title">Start here</span>
+<ul>
+<li class=""><a href="index.html">Overview</a></li>
+<li class=""><a href="edge-surface.html">Edge surface</a></li>
+<li class=""><a href="configuration.html">Script URL configuration</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The client</span>
+<ul>
+<li class=""><a href="sensor-script.html">The sensor script</a></li>
+<li class=""><a href="collection.html">What the sensor collects</a></li>
+<li class="active"><a href="pixel-challenge.html">The pixel challenge</a>
+<ul class="sub"><li><a href="#how-it-is-wired">How it is wired</a></li><li><a href="#the-script">The script</a></li><li><a href="#the-payload">The payload</a></li><li><a href="#the-canvas-probe">The canvas probe</a></li><li><a href="#the-permission-probe">The permission probe</a></li><li><a href="#the-retry-loop">The retry loop</a></li></ul></li>
+<li class=""><a href="proof-of-work.html">Proof of work</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The payload</span>
+<ul>
+<li class=""><a href="payload-format.html">sensor_data format</a></li>
+<li class=""><a href="build-generations.html">Build generations</a></li>
+<li class=""><a href="field-map.html">Where fields come from</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Detection</span>
+<ul>
+<li class=""><a href="automation-markers.html">Automation markers</a></li>
+<li class=""><a href="driven-input.html">Driven input tells</a></li>
+<li class=""><a href="transport.html">Transport fingerprints</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Working with it</span>
+<ul>
+<li class=""><a href="oracles.html">Oracles</a></li>
+<li class=""><a href="rotation.html">What rotates</a></li>
+<li class=""><a href="methodology.html">Methodology</a></li>
+</ul></div>
+</nav>
+<main>
+<h1 id="the-pixel-challenge">The pixel challenge</h1>
+<p>A second, entirely separate client. It shares nothing with the sensor: different script, different obfuscation, different endpoint, and a payload that is not encrypted at all.</p>
+<h2 id="how-it-is-wired">How it is wired</h2>
+<p>The document carries an inline seed and two script tags:</p>
+<pre class="highlight"><code class="lang-html"><span class="hl-p">&lt;</span><span class="hl-nt">script</span> <span class="hl-na">type</span><span class="hl-o">=</span><span class="hl-s">"text/javascript"</span><span class="hl-p">&gt;</span>bazadebezolkohpepadr="1320943881"<span class="hl-p">&lt;/</span><span class="hl-nt">script</span><span class="hl-p">&gt;</span>
+<span class="hl-p">&lt;</span><span class="hl-nt">script</span> <span class="hl-na">type</span><span class="hl-o">=</span><span class="hl-s">"text/javascript"</span> <span class="hl-na">src</span><span class="hl-o">=</span><span class="hl-s">"/akam/13/4ebc0144"</span><span class="hl-p">&gt;</span><span class="hl-p">&lt;/</span><span class="hl-nt">script</span><span class="hl-p">&gt;</span>
+<span class="hl-p">&lt;</span><span class="hl-nt">script</span> <span class="hl-na">type</span><span class="hl-o">=</span><span class="hl-s">"text/javascript"</span> <span class="hl-na">src</span><span class="hl-o">=</span><span class="hl-s">"/akam/13/pixel_4ebc0144?a=&lt;base64&gt;"</span><span class="hl-p">&gt;</span><span class="hl-p">&lt;/</span><span class="hl-nt">script</span><span class="hl-p">&gt;</span></code></pre>
+<p><code>/akam/13/&lt;hash&gt;</code> is the pixel client. <code>pixel_&lt;hash&gt;</code> is where it posts. The hash is derived from the seed:</p>
+<pre class="highlight"><code class="lang-js"><span class="hl-k">const</span> hash <span class="hl-o">=</span> <span class="hl-p">(</span><span class="hl-m">77</span> <span class="hl-o">^</span> bazadebezolkohpepadr<span class="hl-p">)</span><span class="hl-p">.</span><span class="hl-nf">toString</span><span class="hl-p">(</span><span class="hl-m">16</span><span class="hl-p">)</span><span class="hl-p">;</span>
+<span class="hl-c">// 1320943881 ^ 77 === 0x4ebc0144</span></code></pre>
+<p>The script recomputes the POST path itself rather than trusting the tag, so the seed is the only thing that has to arrive intact. The <code>a</code> parameter decodes from base64 to <code>t=&lt;40 hex&gt;&amp;js=off</code>, where <code>t</code> is the token the client posts back.</p>
+<p>Two properties sampled today served this client and nothing else at <code>/akam/13/&lt;hash&gt;</code>, at 26,699 and 26,711 bytes, having named full obfuscated sensors a day earlier. The pixel client is not only a legacy path.</p>
+<h2 id="the-script">The script</h2>
+<p>Around 27 KB, obfuscated with a plain hex-escaped string table (<code>var _ = ["\x2c\x20", …]</code>, roughly 340 entries) referenced as <code>_[n]</code>. No integrity check, no control-flow flattening, no runtime decoding. Inlining the table statically is enough to read it; there is no need to run it.</p>
+<p>Three 32-hex constants are baked in per build, one of which is posted as <code>u</code>. The hash primitive is stock SHA-1, recognisable from its initial state:</p>
+<pre class="highlight"><code class="lang-js"><span class="hl-m">1518500249</span><span class="hl-p">,</span> <span class="hl-m">1859775393</span><span class="hl-p">,</span> <span class="hl-m">2400959708</span><span class="hl-p">,</span> <span class="hl-m">3395469782</span></code></pre>
+<p><strong>How it is detected:</strong> this client is the cheap one to study and the cheap one to fake, which is why it carries less weight than the sensor. It is worth reading precisely because it states in plaintext what the sensor sends encrypted.</p>
+<h2 id="the-payload">The payload</h2>
+<p><code>POST /akam/13/pixel_&lt;hash&gt;</code>, <code>application/x-www-form-urlencoded</code>, no encryption and no encoding beyond form escaping.</p>
+<table>
+<thead><tr><th>field</th><th>contents</th></tr></thead>
+<tbody>
+<tr><td><code>ap</code></td><td><code>true</code></td></tr>
+<tr><td><code>bt</code></td><td><code>navigator.getBattery()</code> result as JSON</td></tr>
+<tr><td><code>fonts</code>, <code>fh</code></td><td>font probe, <code>null</code> when it does not run</td></tr>
+<tr><td><code>timing</code></td><td>stage timings <code>1</code>…<code>6</code>, <code>main</code>, <code>compute</code>, <code>send</code>, plus a <code>profile</code> object of per-probe status codes</td></tr>
+<tr><td><code>bp</code></td><td>ten signed 32-bit integers</td></tr>
+<tr><td><code>sr</code></td><td><code>inner</code>, <code>outer</code>, <code>screen</code>, <code>pageOffset</code>, <code>avail</code>, <code>size</code>, <code>client</code>, <code>colorDepth</code>, <code>pixelDepth</code></td></tr>
+<tr><td><code>dp</code></td><td>presence map for 25 DOM features, from <code>XDomainRequest</code> to <code>contextMenu</code></td></tr>
+<tr><td><code>lt</code></td><td><code>Date.now()</code> plus a small integer</td></tr>
+<tr><td><code>ps</code></td><td><code>localStorage</code> and <code>sessionStorage</code> writability</td></tr>
+<tr><td><code>cv</code></td><td>SHA-1 of a canvas dataURL</td></tr>
+<tr><td><code>fp</code>, <code>sp</code>, <code>ieps</code>, <code>av</code></td><td>booleans</td></tr>
+<tr><td><code>br</code></td><td>browser name</td></tr>
+<tr><td><code>z</code></td><td><code>{"a":&lt;int&gt;,"b":1,"c":1}</code></td></tr>
+<tr><td><code>jsv</code></td><td><code>1.5</code>, the highest <code>language="JavaScript1.x"</code> a script tag accepts</td></tr>
+<tr><td><code>nav</code></td><td>a full <code>navigator</code> dump including <code>plugins</code>, <code>webdriver</code>, <code>languages</code>, <code>oscpu</code>, <code>buildID</code></td></tr>
+<tr><td><code>crc</code></td><td><code>window.chrome</code> serialised</td></tr>
+<tr><td><code>t</code></td><td>SHA-1 of the seed</td></tr>
+<tr><td><code>u</code></td><td>the build's first baked constant</td></tr>
+<tr><td><code>nap</code></td><td>a 20-digit string, one digit per permission probe</td></tr>
+</tbody>
+</table>
+<h2 id="the-canvas-probe">The canvas probe</h2>
+<p>The well-known one, unchanged:</p>
+<pre class="highlight"><code class="lang-js">ctx<span class="hl-p">.</span>fillStyle <span class="hl-o">=</span> <span class="hl-s">"rgba(255,153,153, 0.5)"</span><span class="hl-p">;</span>
+ctx<span class="hl-p">.</span>font <span class="hl-o">=</span> <span class="hl-s">"18pt Tahoma"</span><span class="hl-p">;</span>
+ctx<span class="hl-p">.</span><span class="hl-nf">fillText</span><span class="hl-p">(</span><span class="hl-s">"Soft Ruddy Foothold 2"</span><span class="hl-p">,</span> <span class="hl-m">2</span><span class="hl-p">,</span> <span class="hl-m">2</span><span class="hl-p">)</span><span class="hl-p">;</span>
+<span class="hl-c">// three coloured rectangles</span>
+ctx<span class="hl-p">.</span><span class="hl-nf">fillText</span><span class="hl-p">(</span><span class="hl-s">"!H71JCaj)]# 1@#"</span><span class="hl-p">,</span> <span class="hl-m">4</span><span class="hl-p">,</span> <span class="hl-m">8</span><span class="hl-p">)</span><span class="hl-p">;</span>
+<span class="hl-nf">sha1</span><span class="hl-p">(</span>canvas<span class="hl-p">.</span><span class="hl-nf">toDataURL</span><span class="hl-p">(</span><span class="hl-p">)</span><span class="hl-p">)</span><span class="hl-p">;</span></code></pre>
+<p><strong>How it is detected:</strong> the output is a single hash, so any per-load noise injection produces a value that never repeats. A real machine returns the same hash on every load and a stable one across sessions. Randomising canvas output is more visible here than leaving it alone.</p>
+<h2 id="the-permission-probe">The permission probe</h2>
+<p><code>nap</code> comes from querying the Permissions API for a list of names and recording each outcome as one digit, with <code>4</code> reserved for the case where the browser answers <code>is not a valid enum value of type PermissionName</code>.</p>
+<p><strong>How it is detected:</strong> the invalid-enum digit is the interesting one. It records which names the browser refuses to recognise, which is a version and engine tell that a patched <code>permissions.query</code> usually gets wrong by answering everything successfully.</p>
+<h2 id="the-retry-loop">The retry loop</h2>
+<p><code>compute()</code> fills the payload and the caller checks <code>exitEarly()</code>, which is <code>X.z.a != v</code>: the <code>z</code> probe has to agree with the seed. If it does not, and less than 500 ms has passed, the script recomputes <code>z</code> under a new key (<code>z1</code>, <code>z2</code>, …) every 100 ms. Whatever it has after 500 ms is posted, and the number of retries is visible in the <code>profile</code> object, so a client that struggled says so in its own payload.</p>
+<div class="pager"><a class="prev" href="collection.html">What the sensor collects</a>
+<a class="next" href="proof-of-work.html">Proof of work</a></div>
+</main>
+</div>
+<div class="footer-content">
+Measured against live builds. Formats and constants rotate per build; re-measure before relying on any number here.
+</div>
+</body>
+</html>

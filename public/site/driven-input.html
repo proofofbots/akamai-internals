@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Driven input tells - Akamai Bot Manager internals</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">Akamai Bot Manager internals</a>
+  <span class="tagline">Measured notes on the sensor, the payload and the edge</span>
+</header>
+<div class="shell">
+<nav class="sidebar">
+<div class="group"><span class="group-title">Start here</span>
+<ul>
+<li class=""><a href="index.html">Overview</a></li>
+<li class=""><a href="edge-surface.html">Edge surface</a></li>
+<li class=""><a href="configuration.html">Script URL configuration</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The client</span>
+<ul>
+<li class=""><a href="sensor-script.html">The sensor script</a></li>
+<li class=""><a href="collection.html">What the sensor collects</a></li>
+<li class=""><a href="pixel-challenge.html">The pixel challenge</a></li>
+<li class=""><a href="proof-of-work.html">Proof of work</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The payload</span>
+<ul>
+<li class=""><a href="payload-format.html">sensor_data format</a></li>
+<li class=""><a href="build-generations.html">Build generations</a></li>
+<li class=""><a href="field-map.html">Where fields come from</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Detection</span>
+<ul>
+<li class=""><a href="automation-markers.html">Automation markers</a></li>
+<li class="active"><a href="driven-input.html">Driven input tells</a>
+<ul class="sub"><li><a href="#key-events-carry-no-code">Key events carry no code</a></li><li><a href="#screen-coordinates-come-from-the-real-window">Screen coordinates come from the real window</a></li><li><a href="#client-hints-have-to-be-sent-with-the-user-agent">Client hints have to be sent with the user agent</a></li><li><a href="#pointer-events">Pointer events</a></li><li><a href="#interaction-shape-is-not-always-what-is-being-read">Interaction shape is not always what is being read</a></li></ul></li>
+<li class=""><a href="transport.html">Transport fingerprints</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Working with it</span>
+<ul>
+<li class=""><a href="oracles.html">Oracles</a></li>
+<li class=""><a href="rotation.html">What rotates</a></li>
+<li class=""><a href="methodology.html">Methodology</a></li>
+</ul></div>
+</nav>
+<main>
+<h1 id="driven-input-tells">Driven input tells</h1>
+<p>The sensor registers pointer, key and touch listeners and turns them into event logs and counters. Anything driving a browser through the DevTools protocol produces events that differ from real ones in ways that have nothing to do with movement curves, and those differences are properties of the event object, visible to any listener.</p>
+<p>The way to find them is to record every property of every event on a page, drive it synthetically, then type on the same page by hand and diff the two recordings. Everything below came out of that diff.</p>
+<h2 id="key-events-carry-no-code">Key events carry no code</h2>
+<p><code>Input.dispatchKeyEvent</code> with only <code>text</code> set produces <code>event.code === ""</code> and <code>event.keyCode === 0</code>. Real typing produces <code>KeyH</code> and <code>72</code>. Both are read straight off the event by any handler, and the sensor has a <code>keydown</code> listener.</p>
+<p>The mapping is mechanical, and it has to cover shifted characters as separate physical keys:</p>
+<pre class="highlight"><code class="lang-js"><span class="hl-k">if</span> <span class="hl-p">(</span><span class="hl-o">/^</span><span class="hl-p">[</span>a<span class="hl-o">-</span>z<span class="hl-p">]</span>$<span class="hl-o">/</span>i<span class="hl-p">.</span><span class="hl-nf">test</span><span class="hl-p">(</span>base<span class="hl-p">)</span><span class="hl-p">)</span> <span class="hl-k">return</span> <span class="hl-p">{</span> <span class="hl-na">code</span><span class="hl-p">:</span> <span class="hl-s">`Key${upper}`</span><span class="hl-p">,</span> <span class="hl-na">keyCode</span><span class="hl-p">:</span> upper<span class="hl-p">.</span><span class="hl-nf">charCodeAt</span><span class="hl-p">(</span><span class="hl-m">0</span><span class="hl-p">)</span><span class="hl-p">,</span> shift <span class="hl-p">}</span><span class="hl-p">;</span>
+<span class="hl-k">if</span> <span class="hl-p">(</span><span class="hl-o">/^</span><span class="hl-p">[</span><span class="hl-m">0</span><span class="hl-o">-</span><span class="hl-m">9</span><span class="hl-p">]</span>$<span class="hl-o">/</span><span class="hl-p">.</span><span class="hl-nf">test</span><span class="hl-p">(</span>base<span class="hl-p">)</span><span class="hl-p">)</span> <span class="hl-k">return</span> <span class="hl-p">{</span> <span class="hl-na">code</span><span class="hl-p">:</span> <span class="hl-s">`Digit${base}`</span><span class="hl-p">,</span> <span class="hl-na">keyCode</span><span class="hl-p">:</span> base<span class="hl-p">.</span><span class="hl-nf">charCodeAt</span><span class="hl-p">(</span><span class="hl-m">0</span><span class="hl-p">)</span><span class="hl-p">,</span> shift <span class="hl-p">}</span><span class="hl-p">;</span>
+
+<span class="hl-k">const</span> PUNCTUATION <span class="hl-o">=</span> <span class="hl-p">{</span>
+  <span class="hl-s">"-"</span><span class="hl-p">:</span> <span class="hl-p">[</span><span class="hl-s">"Minus"</span><span class="hl-p">,</span> <span class="hl-m">189</span><span class="hl-p">]</span><span class="hl-p">,</span> <span class="hl-s">"="</span><span class="hl-p">:</span> <span class="hl-p">[</span><span class="hl-s">"Equal"</span><span class="hl-p">,</span> <span class="hl-m">187</span><span class="hl-p">]</span><span class="hl-p">,</span> <span class="hl-s">";"</span><span class="hl-p">:</span> <span class="hl-p">[</span><span class="hl-s">"Semicolon"</span><span class="hl-p">,</span> <span class="hl-m">186</span><span class="hl-p">]</span><span class="hl-p">,</span>
+  <span class="hl-s">"'"</span><span class="hl-p">:</span> <span class="hl-p">[</span><span class="hl-s">"Quote"</span><span class="hl-p">,</span> <span class="hl-m">222</span><span class="hl-p">]</span><span class="hl-p">,</span> <span class="hl-s">","</span><span class="hl-p">:</span> <span class="hl-p">[</span><span class="hl-s">"Comma"</span><span class="hl-p">,</span> <span class="hl-m">188</span><span class="hl-p">]</span><span class="hl-p">,</span> <span class="hl-s">"."</span><span class="hl-p">:</span> <span class="hl-p">[</span><span class="hl-s">"Period"</span><span class="hl-p">,</span> <span class="hl-m">190</span><span class="hl-p">]</span><span class="hl-p">,</span>
+  <span class="hl-s">"/"</span><span class="hl-p">:</span> <span class="hl-p">[</span><span class="hl-s">"Slash"</span><span class="hl-p">,</span> <span class="hl-m">191</span><span class="hl-p">]</span><span class="hl-p">,</span> <span class="hl-s">"`"</span><span class="hl-p">:</span> <span class="hl-p">[</span><span class="hl-s">"Backquote"</span><span class="hl-p">,</span> <span class="hl-m">192</span><span class="hl-p">]</span><span class="hl-p">,</span> <span class="hl-s">" "</span><span class="hl-p">:</span> <span class="hl-p">[</span><span class="hl-s">"Space"</span><span class="hl-p">,</span> <span class="hl-m">32</span><span class="hl-p">]</span><span class="hl-p">,</span>
+<span class="hl-p">}</span><span class="hl-p">;</span></code></pre>
+<p>Typing <code>A</code> means a <code>ShiftLeft</code> keydown, then <code>KeyA</code> with <code>keyCode</code> 65 and the shift modifier, then the matching keyups. A driver that emits one event per character with no modifier state produces a keyboard nobody owns.</p>
+<h2 id="screen-coordinates-come-from-the-real-window">Screen coordinates come from the real window</h2>
+<p>Mouse events carry <code>screenX</code> and <code>screenY</code> derived from the actual OS window position, and they ignore <code>Emulation.setDeviceMetricsOverride</code> entirely. A browser launched off screen at <code>--window-position=-3200,-3200</code> while the metrics override claims <code>screenX: 0</code> emits events whose screen coordinates disagree with the reported screen by 3200 pixels, on every single event.</p>
+<p>The fix is arithmetic, not patching: put the window where the override says the viewport is, allowing for browser chrome height.</p>
+<pre class="highlight"><code class="lang-js"><span class="hl-k">export</span> <span class="hl-k">const</span> WINDOW_POSITION <span class="hl-o">=</span> <span class="hl-p">{</span>
+  <span class="hl-na">x</span><span class="hl-p">:</span> METRICS<span class="hl-p">.</span>positionX<span class="hl-p">,</span>
+  <span class="hl-na">y</span><span class="hl-p">:</span> METRICS<span class="hl-p">.</span>positionY <span class="hl-o">+</span> <span class="hl-p">(</span><span class="hl-m">982</span> <span class="hl-o">-</span> METRICS<span class="hl-p">.</span>height<span class="hl-p">)</span><span class="hl-p">,</span>
+<span class="hl-p">}</span><span class="hl-p">;</span></code></pre>
+<h2 id="client-hints-have-to-be-sent-with-the-user-agent">Client hints have to be sent with the user agent</h2>
+<p><code>Emulation.setUserAgentOverride</code> without <code>userAgentMetadata</code> empties <code>navigator.userAgentData.brands</code> and the <code>sec-ch-ua</code> request header. No real Chrome looks like that, and the emptiness is visible both in the page and at the edge before any payload is parsed.</p>
+<p>Reading the browser's own client hints and passing them back through the override is the only version of this that stays consistent when Chrome updates. Note that <code>about:blank</code> has no <code>userAgentData</code>, so the read has to happen on a real page.</p>
+<h2 id="pointer-events">Pointer events</h2>
+<p>Synthetic mouse events default to a <code>pressure</code> of 0 or 1 with no intermediate values, and a <code>pointerType</code> that must be set explicitly. The dispatcher sets <code>pointerType: "mouse"</code> on every event and a <code>force</code> on press, because a pointer that reports no pressure at all while claiming to be a mouse is a shape a real device does not produce.</p>
+<p>Movement itself is the least of it: a quadratic bezier with easing, per-step jitter and 6 to 20 ms between steps is enough for the log to look like a hand. The properties above are what separate the events regardless of the path they trace.</p>
+<h2 id="interaction-shape-is-not-always-what-is-being-read">Interaction shape is not always what is being read</h2>
+<p>Worth recording because it is the assumption everyone reaches for first. On a login endpoint that does refuse unbelievable sessions, a human typing by hand into a driven browser, in the same session and the same tab, got the same answer as the driver did. Deliberately robotic tab-only typing in an ordinary browser also passed. Session warmth, incognito and an hours-old cookie jar changed nothing.</p>
+<p>So the input tells above are real, and they are worth fixing because they are cheap and visible, but on that endpoint the verdict was decided by whether the payload decoded into a coherent session, not by how the mouse moved.</p>
+<div class="pager"><a class="prev" href="automation-markers.html">Automation markers</a>
+<a class="next" href="transport.html">Transport fingerprints</a></div>
+</main>
+</div>
+<div class="footer-content">
+Measured against live builds. Formats and constants rotate per build; re-measure before relying on any number here.
+</div>
+</body>
+</html>

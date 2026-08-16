@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Methodology - Akamai Bot Manager internals</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">Akamai Bot Manager internals</a>
+  <span class="tagline">Measured notes on the sensor, the payload and the edge</span>
+</header>
+<div class="shell">
+<nav class="sidebar">
+<div class="group"><span class="group-title">Start here</span>
+<ul>
+<li class=""><a href="index.html">Overview</a></li>
+<li class=""><a href="edge-surface.html">Edge surface</a></li>
+<li class=""><a href="configuration.html">Script URL configuration</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The client</span>
+<ul>
+<li class=""><a href="sensor-script.html">The sensor script</a></li>
+<li class=""><a href="collection.html">What the sensor collects</a></li>
+<li class=""><a href="pixel-challenge.html">The pixel challenge</a></li>
+<li class=""><a href="proof-of-work.html">Proof of work</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The payload</span>
+<ul>
+<li class=""><a href="payload-format.html">sensor_data format</a></li>
+<li class=""><a href="build-generations.html">Build generations</a></li>
+<li class=""><a href="field-map.html">Where fields come from</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Detection</span>
+<ul>
+<li class=""><a href="automation-markers.html">Automation markers</a></li>
+<li class=""><a href="driven-input.html">Driven input tells</a></li>
+<li class=""><a href="transport.html">Transport fingerprints</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Working with it</span>
+<ul>
+<li class=""><a href="oracles.html">Oracles</a></li>
+<li class=""><a href="rotation.html">What rotates</a></li>
+<li class="active"><a href="methodology.html">Methodology</a>
+<ul class="sub"><li><a href="#run-the-script-do-not-read-it">Run the script, do not read it</a></li><li><a href="#compare-payloads-field-by-field">Compare payloads field by field</a></li><li><a href="#separate-the-signal-from-the-noise-with-a-second-baseline">Separate the signal from the noise with a second baseline</a></li><li><a href="#charge-the-sandbox-for-the-time-it-did-not-spend">Charge the sandbox for the time it did not spend</a></li><li><a href="#keep-an-offline-regression-suite">Keep an offline regression suite</a></li><li><a href="#attribute-failures-to-one-layer-at-a-time">Attribute failures to one layer at a time</a></li></ul></li>
+</ul></div>
+</nav>
+<main>
+<h1 id="methodology">Methodology</h1>
+<p>How the rest of these pages were measured, and the traps that produced wrong answers first.</p>
+<h2 id="run-the-script-do-not-read-it">Run the script, do not read it</h2>
+<p>Both generations flatten control flow into numeric state machines and decode their strings at runtime with a stateful decoder. Static reading stalls immediately: <code>d4[f()][g()]</code> means nothing until you know that <code>f()</code> returned <code>"navigator"</code> and <code>g()</code> returned <code>"userAgent"</code> on this run.</p>
+<p>So the script is instrumented as served, with every assignment, return value, array element and decoder call wrapped in a recorder that keeps the last few values per site plus a global sequence number, and the table is snapshotted at the moment the run builds its first payload. A field is then explained by walking its expression backwards: an identifier resolves to the assignment that last wrote it, a call resolves to the return that produced the value the caller received, a member access resolves through the recorded decoder call that produced its key.</p>
+<p>Two rules make this work and are easy to get wrong:</p>
+<ul>
+<li><strong>Do not fold the strings first.</strong> Replacing decoder calls with their results changes what later calls return, because the decoder is stateful. The folded copy is for reading, never for running.</li>
+<li><strong>Preserve the integrity hash.</strong> The instrumented source is handed back to the script through a patched <code>Function.prototype.toString</code> that strips the recorder wrappers, so the script's own hash still matches. Two bugs in that path silently corrupted whole runs: an unwrapper that tracked string quotes but not regex literals mangled everything after a <code>/\\|"/g</code> in the source, and wrapping <code>return a, b, c</code> as <code>record(7, a, b, c)</code> turned the comma operator into argument separators and quietly replaced a dispatcher's return value.</li>
+</ul>
+<h2 id="compare-payloads-field-by-field">Compare payloads field by field</h2>
+<p>The sandbox payload is compared against the payload the real page posted in the same session, with the snapshot taken at the moment the page makes its first post rather than at the end of the wait. That timing matters: a page grows form inputs while it sits, so a late snapshot makes the form inventory fields differ for reasons that have nothing to do with the sandbox.</p>
+<p>Every field lands in one bucket:</p>
+<table>
+<thead><tr><th>bucket</th><th>meaning</th></tr></thead>
+<tbody>
+<tr><td><code>match</code></td><td>identical in both</td></tr>
+<tr><td><code>volatile</code></td><td>differs, and differs between two real posts of one real session too</td></tr>
+<tr><td><code>gap</code></td><td>differs, and a real browser holds it steady</td></tr>
+<tr><td><code>missing</code></td><td>the real payload has it, ours does not</td></tr>
+<tr><td><code>extra</code></td><td>ours has it, the real payload does not</td></tr>
+</tbody>
+</table>
+<p>Only the last three are defects. The volatile list is not an opinion: it is generated by comparing two real posts of one session and taking exactly the fields a browser does not hold steady. Matching is on the leaf name rather than the full path, because different builds nest the same field under different parents.</p>
+<h2 id="separate-the-signal-from-the-noise-with-a-second-baseline">Separate the signal from the noise with a second baseline</h2>
+<p>For anything measured by changing one environment fact and diffing payloads, the baseline is run twice and every address that differs between two identical clean runs is dropped. On one property that filter removes 18 to 21 addresses per sweep, mostly timings, the derived block, the hour bucket and the session counters.</p>
+<p>That filter is only good enough to read a single-bit mask change through. Any result that depends on a smaller difference needs deterministic replay rather than another live sweep.</p>
+<h2 id="charge-the-sandbox-for-the-time-it-did-not-spend">Charge the sandbox for the time it did not spend</h2>
+<p>A sandbox that runs the sensor outside a browser runs it too fast, and the payload says so: fields carrying elapsed milliseconds from <code>bmak.startTs</code> read 2 to 5 where a real browser reads 24 to 31.</p>
+<p>Two measurements settled what that gap is. A CPU profile of a real load shows the script holding the CPU for about 37 ms before the builder runs and another 37 ms inside it, so the time is real compute rather than waiting. Instrumenting the same script in the browser and in the sandbox and counting calls up to the moment of the post gives 587,745 against 586,620, a difference of 0.2 percent. The sandbox is not skipping work, it runs the same code an order of magnitude faster.</p>
+<p>Scaling the clock cannot fix that, because the two windows are wrong in opposite directions. What works is charging the initialisation cost once, at the moment the script writes <code>bmak.startTs</code>, and letting everything after that run at the sandbox's own speed:</p>
+<pre class="highlight"><code class="lang-js"><span class="hl-k">export</span> <span class="hl-k">const</span> DEFAULT_INIT_COST <span class="hl-o">=</span> <span class="hl-m">25</span><span class="hl-p">;</span>
+<span class="hl-k">export</span> <span class="hl-k">const</span> DEFAULT_FRICTION <span class="hl-o">=</span> <span class="hl-m">0.12</span><span class="hl-p">;</span></code></pre>
+<p>With the charge in place the elapsed fields land on the real values. This is a calibration measured from real loads, not a simulation, and it says nothing about how a different machine would time the same work.</p>
+<h2 id="keep-an-offline-regression-suite">Keep an offline regression suite</h2>
+<p>Anything learned about a build is pinned as a capture: the script bytes, the environment snapshot, the real payloads and the metadata. The checks then run with no browser and no network, and fail if a single non-volatile field drifts. What they cover, per pin:</p>
+<pre class="highlight"><code class="lang-text">an adapter claims every pinned payload
+an unknown build is reported rather than misparsed
+every pinned payload decodes and re-encodes byte for byte
+every pinned payload<span class="hl-s">'s checksum matches</span>
+the recovered shuffle key reproduces the permutation
+the decoded plaintext is well formed for this build
+the shuffle and its inverse agree on random text
+a known permutation is recovered from its own key space
+script parses and its features are readable
+integrity hash reproduces the build<span class="hl-s">'s delta</span>
+re-signing an edited script keeps the delta
+murmur port agrees with itself on a known string
+the preamble token derives from the timestamp alone
+a payload rebuilt from its own template is identical
+an overridden field survives a forge and decode
+the captured derived block factorises its own values</code></pre>
+<p>Ten pins across both generations currently pass 21 to 23 checks each, with the rest reported as not applicable to that generation rather than silently skipped. The value of this is not the checks themselves, it is that a claim made once stays true after the next change, and that a stale pin fails loudly when a clock bucket ages out rather than being quietly tolerated everywhere.</p>
+<h2 id="attribute-failures-to-one-layer-at-a-time">Attribute failures to one layer at a time</h2>
+<p>Two things are being tested whenever a payload is judged: the payload and the handshake. Send a payload from inside a real browser to test the payload. Send a known-good payload from your own client to test the handshake. Doing both at once produces a result nobody can act on, and a payload that fails because of a socket looks exactly like a payload that fails because of a field.</p>
+<div class="pager"><a class="prev" href="rotation.html">What rotates</a>
+<span></span></div>
+</main>
+</div>
+<div class="footer-content">
+Measured against live builds. Formats and constants rotate per build; re-measure before relying on any number here.
+</div>
+</body>
+</html>

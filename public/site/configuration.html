@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Script URL configuration - Akamai Bot Manager internals</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">Akamai Bot Manager internals</a>
+  <span class="tagline">Measured notes on the sensor, the payload and the edge</span>
+</header>
+<div class="shell">
+<nav class="sidebar">
+<div class="group"><span class="group-title">Start here</span>
+<ul>
+<li class=""><a href="index.html">Overview</a></li>
+<li class=""><a href="edge-surface.html">Edge surface</a></li>
+<li class="active"><a href="configuration.html">Script URL configuration</a>
+<ul class="sub"><li><a href="#the-encoding">The encoding</a></li><li><a href="#what-the-bits-do">What the bits do</a></li><li><a href="#measured">Measured</a></li><li><a href="#the-host-derived-case">The host-derived case</a></li></ul></li>
+</ul></div>
+<div class="group"><span class="group-title">The client</span>
+<ul>
+<li class=""><a href="sensor-script.html">The sensor script</a></li>
+<li class=""><a href="collection.html">What the sensor collects</a></li>
+<li class=""><a href="pixel-challenge.html">The pixel challenge</a></li>
+<li class=""><a href="proof-of-work.html">Proof of work</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The payload</span>
+<ul>
+<li class=""><a href="payload-format.html">sensor_data format</a></li>
+<li class=""><a href="build-generations.html">Build generations</a></li>
+<li class=""><a href="field-map.html">Where fields come from</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Detection</span>
+<ul>
+<li class=""><a href="automation-markers.html">Automation markers</a></li>
+<li class=""><a href="driven-input.html">Driven input tells</a></li>
+<li class=""><a href="transport.html">Transport fingerprints</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Working with it</span>
+<ul>
+<li class=""><a href="oracles.html">Oracles</a></li>
+<li class=""><a href="rotation.html">What rotates</a></li>
+<li class=""><a href="methodology.html">Methodology</a></li>
+</ul></div>
+</nav>
+<main>
+<h1 id="script-url-configuration">Script URL configuration</h1>
+<p>The sensor configures itself from the path it was served from. No inline call, no JSON blob: the settings are one bit per character pair of one path segment, readable without executing anything.</p>
+<h2 id="the-encoding">The encoding</h2>
+<p>Take <code>src</code>, split on <code>/</code>, and use the fourth segment from the end. It is used only if its length is even. Each pair of characters is one bit: <code>1</code> if either character is in <code>aeiouy13579</code>, <code>0</code> otherwise.</p>
+<pre class="highlight"><code class="lang-js"><span class="hl-k">const</span> MARK <span class="hl-o">=</span> <span class="hl-s">"aeiouy13579"</span><span class="hl-p">;</span>
+
+<span class="hl-k">const</span> bitsFromSegment <span class="hl-o">=</span> <span class="hl-p">(</span>segment<span class="hl-p">)</span> <span class="hl-o">=&gt;</span> <span class="hl-p">{</span>
+  <span class="hl-k">const</span> lower <span class="hl-o">=</span> <span class="hl-nf">String</span><span class="hl-p">(</span>segment<span class="hl-p">)</span><span class="hl-p">.</span><span class="hl-nf">toLowerCase</span><span class="hl-p">(</span><span class="hl-p">)</span><span class="hl-p">;</span>
+  <span class="hl-k">let</span> bits <span class="hl-o">=</span> <span class="hl-s">""</span><span class="hl-p">;</span>
+
+  <span class="hl-k">for</span> <span class="hl-p">(</span><span class="hl-k">let</span> index <span class="hl-o">=</span> <span class="hl-m">0</span><span class="hl-p">;</span> index <span class="hl-o">&lt;</span> lower<span class="hl-p">.</span>length<span class="hl-p">;</span> index <span class="hl-o">+=</span> <span class="hl-m">2</span><span class="hl-p">)</span> <span class="hl-p">{</span>
+    <span class="hl-k">const</span> first <span class="hl-o">=</span> MARK<span class="hl-p">.</span><span class="hl-nf">indexOf</span><span class="hl-p">(</span>lower<span class="hl-p">.</span><span class="hl-nf">charAt</span><span class="hl-p">(</span>index<span class="hl-p">)</span><span class="hl-p">)</span> <span class="hl-o">&gt;=</span> <span class="hl-m">0</span><span class="hl-p">;</span>
+    <span class="hl-k">const</span> second <span class="hl-o">=</span> MARK<span class="hl-p">.</span><span class="hl-nf">indexOf</span><span class="hl-p">(</span>lower<span class="hl-p">.</span><span class="hl-nf">charAt</span><span class="hl-p">(</span>index <span class="hl-o">+</span> <span class="hl-m">1</span><span class="hl-p">)</span><span class="hl-p">)</span> <span class="hl-o">&gt;=</span> <span class="hl-m">0</span><span class="hl-p">;</span>
+    bits <span class="hl-o">+=</span> first <span class="hl-o">||</span> second <span class="hl-o">?</span> <span class="hl-s">"1"</span> <span class="hl-p">:</span> <span class="hl-s">"0"</span><span class="hl-p">;</span>
+  <span class="hl-p">}</span>
+
+  <span class="hl-k">return</span> bits<span class="hl-p">;</span>
+<span class="hl-p">}</span><span class="hl-p">;</span></code></pre>
+<p>Worked through on a segment served today:</p>
+<pre class="highlight"><code class="lang-text">segment   a Y  O G  D f  h Y  c E  i O  D r  X O
+bit        <span class="hl-m">1</span>    <span class="hl-m">1</span>    <span class="hl-m">0</span>    <span class="hl-m">1</span>    <span class="hl-m">1</span>    <span class="hl-m">1</span>    <span class="hl-m">0</span>    <span class="hl-m">1</span>     -&gt;  <span class="hl-m">11011101</span></code></pre>
+<p>A segment of three bits or fewer is not applied at all.</p>
+<h2 id="what-the-bits-do">What the bits do</h2>
+<table>
+<thead><tr><th>bit</th><th>setter</th><th>effect</th></tr></thead>
+<tbody>
+<tr><td>0</td><td><code>_setFsp</code></td><td>rewrite the post URL to <code>https</code></td></tr>
+<tr><td>1</td><td><code>_setBm</code></td><td>post to <code>/_bm/_data</code> instead of the script path</td></tr>
+<tr><td>2</td><td><code>_setPowState</code></td><td>run the proof-of-work challenge</td></tr>
+<tr><td>3</td><td><code>_setIpr</code></td><td>carry the IP reputation signal</td></tr>
+<tr><td>4</td><td><code>_setAkid</code></td><td>carry the Akamai id, only read when there are more than four bits</td></tr>
+</tbody>
+</table>
+<p>Bit 1 does not mean what it looks like. After the bits are applied the sensor calls <code>_fetchParams(false)</code> and then <code>_setAu(&lt;its own src&gt;)</code>, which overwrites the <code>_setBm</code> choice, so a property with bit 1 set still posts to the script path. <code>_setAu</code> runs last and wins.</p>
+<h2 id="measured">Measured</h2>
+<p>Six properties sampled in one sweep, all serving an obfuscated sensor path:</p>
+<table>
+<thead><tr><th>build</th><th>segment</th><th>bits</th><th>proof of work</th></tr></thead>
+<tbody>
+<tr><td>v2 logistics portal</td><td><code>aYOGDfhYcEiODrXO</code></td><td><code>11011101</code></td><td>off</td></tr>
+<tr><td>v3 accounting SaaS login</td><td><code>9mJYbtOiuDD3mp9i</code></td><td><code>11011101</code></td><td>off</td></tr>
+<tr><td>v3 airline</td><td><code>p1V1N89wJ7YOrSYOhu</code></td><td><code>110111011</code></td><td>off</td></tr>
+<tr><td>v3 retail</td><td><code>cOGuQm5L9p9mpSOi</code></td><td><code>11011101</code></td><td>off</td></tr>
+<tr><td>v3 airline (second)</td><td><code>Ycf9GhD9Y5uGzJ</code></td><td><code>1101110</code></td><td>off</td></tr>
+</tbody>
+</table>
+<p>Every one of them decodes to <code>forceSecure</code>, <code>botManager</code>, <code>ipReputation</code> and <code>akid</code> on, proof of work off. That has held across every host sampled with a real obfuscated path, which is why no <code>sec-cpt</code> challenge has been seen from an ordinary page load.</p>
+<p>The same origin can also differ per path: on one property the homepage and login page shared a segment while the tracking path served a different one, differing in the <code>botManager</code> bit, with identical script bytes on all three.</p>
+<h2 id="the-host-derived-case">The host-derived case</h2>
+<p>When a site serves the sensor from <code>/akam/13/&lt;hash&gt;</code>, the fourth-from-last segment is the hostname, so the bits are an artefact of the URL shape rather than a setting. The parser flags that case rather than reporting flags:</p>
+<pre class="highlight"><code class="lang-js"><span class="hl-k">return</span> <span class="hl-p">{</span> segment<span class="hl-p">,</span> <span class="hl-na">fromHost</span><span class="hl-p">:</span> segment <span class="hl-o">===</span> host <span class="hl-p">}</span><span class="hl-p">;</span></code></pre>
+<p>Two properties in the same sweep had rotated to exactly that state: the discovery pass found only an <code>/akam/13/&lt;hash&gt;</code> client of 26.7 KB, where a day earlier the same entry pages had named obfuscated sensors of 568 KB and 575 KB. Treat a missing obfuscated path as a configuration that changed, not as a property without Bot Manager.</p>
+<div class="pager"><a class="prev" href="edge-surface.html">Edge surface</a>
+<a class="next" href="sensor-script.html">The sensor script</a></div>
+</main>
+</div>
+<div class="footer-content">
+Measured against live builds. Formats and constants rotate per build; re-measure before relying on any number here.
+</div>
+</body>
+</html>

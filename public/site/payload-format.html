@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sensor_data format - Akamai Bot Manager internals</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">Akamai Bot Manager internals</a>
+  <span class="tagline">Measured notes on the sensor, the payload and the edge</span>
+</header>
+<div class="shell">
+<nav class="sidebar">
+<div class="group"><span class="group-title">Start here</span>
+<ul>
+<li class=""><a href="index.html">Overview</a></li>
+<li class=""><a href="edge-surface.html">Edge surface</a></li>
+<li class=""><a href="configuration.html">Script URL configuration</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The client</span>
+<ul>
+<li class=""><a href="sensor-script.html">The sensor script</a></li>
+<li class=""><a href="collection.html">What the sensor collects</a></li>
+<li class=""><a href="pixel-challenge.html">The pixel challenge</a></li>
+<li class=""><a href="proof-of-work.html">Proof of work</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The payload</span>
+<ul>
+<li class="active"><a href="payload-format.html">sensor_data format</a>
+<ul class="sub"><li><a href="#the-frames">The frames</a></li><li><a href="#the-cipher">The cipher</a></li><li><a href="#generation-2-plaintext">Generation 2 plaintext</a></li><li><a href="#generation-3-plaintext">Generation 3 plaintext</a></li><li><a href="#the-preamble-token">The preamble token</a></li></ul></li>
+<li class=""><a href="build-generations.html">Build generations</a></li>
+<li class=""><a href="field-map.html">Where fields come from</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Detection</span>
+<ul>
+<li class=""><a href="automation-markers.html">Automation markers</a></li>
+<li class=""><a href="driven-input.html">Driven input tells</a></li>
+<li class=""><a href="transport.html">Transport fingerprints</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Working with it</span>
+<ul>
+<li class=""><a href="oracles.html">Oracles</a></li>
+<li class=""><a href="rotation.html">What rotates</a></li>
+<li class=""><a href="methodology.html">Methodology</a></li>
+</ul></div>
+</nav>
+<main>
+<h1 id="sensor-data-format">sensor_data format</h1>
+<p>A <code>sensor_data</code> string is a header of plain fields followed by ciphertext. Both keys travel in the clear, so a captured payload decrypts with nothing but itself.</p>
+<h2 id="the-frames">The frames</h2>
+<p>Generation 2, posted:</p>
+<pre class="highlight"><code class="lang-text"><span class="hl-m">2</span> <span class="hl-p">;</span> <span class="hl-nv">&lt;bitmask&gt;</span> <span class="hl-p">;</span> <span class="hl-nv">&lt;substitution key&gt;</span> <span class="hl-p">;</span> <span class="hl-nv">&lt;shuffle key&gt;</span> <span class="hl-p">;</span> <span class="hl-nv">&lt;six timings&gt;</span> <span class="hl-p">;</span> <span class="hl-nv">&lt;ciphertext&gt;</span></code></pre>
+<p>Generation 2, the shape <code>bmak.get_telemetry()</code> returns, with no bitmask field:</p>
+<pre class="highlight"><code class="lang-text"><span class="hl-m">2</span> <span class="hl-p">;</span> <span class="hl-nv">&lt;substitution key&gt;</span> <span class="hl-p">;</span> <span class="hl-nv">&lt;shuffle key&gt;</span> <span class="hl-p">;</span> <span class="hl-nv">&lt;six timings&gt;</span> <span class="hl-p">;</span> <span class="hl-nv">&lt;ciphertext&gt;</span></code></pre>
+<p>Generation 3, seven header fields:</p>
+<pre class="highlight"><code class="lang-text"><span class="hl-m">3</span> <span class="hl-p">;</span> <span class="hl-nv">&lt;leading&gt;</span> <span class="hl-p">;</span> <span class="hl-nv">&lt;leading&gt;</span> <span class="hl-p">;</span> <span class="hl-nv">&lt;bitmask&gt;</span> <span class="hl-p">;</span> <span class="hl-nv">&lt;substitution key&gt;</span> <span class="hl-p">;</span> <span class="hl-nv">&lt;base64 token&gt;</span> <span class="hl-p">;</span> <span class="hl-nv">&lt;six timings&gt;</span> <span class="hl-p">;</span> <span class="hl-nv">&lt;ciphertext&gt;</span></code></pre>
+<p>Two things bite here. The ciphertext contains <code>;</code>, so a naive split gives a field count that changes between payloads: take the header fields and re-join the rest. And the same build frames differently depending on the channel, so a parser that assumes a fixed header length is wrong for one of the two v2 shapes. Detection is by testing the fields, not by counting them:</p>
+<pre class="highlight"><code class="lang-js"><span class="hl-k">const</span> full <span class="hl-o">=</span>
+  parts<span class="hl-p">.</span>length <span class="hl-o">&gt;</span> <span class="hl-m">5</span> <span class="hl-o">&amp;&amp;</span>
+  NUMERIC<span class="hl-p">.</span><span class="hl-nf">test</span><span class="hl-p">(</span>parts<span class="hl-p">[</span><span class="hl-m">1</span><span class="hl-p">]</span><span class="hl-p">)</span> <span class="hl-o">&amp;&amp;</span> NUMERIC<span class="hl-p">.</span><span class="hl-nf">test</span><span class="hl-p">(</span>parts<span class="hl-p">[</span><span class="hl-m">2</span><span class="hl-p">]</span><span class="hl-p">)</span> <span class="hl-o">&amp;&amp;</span> NUMERIC<span class="hl-p">.</span><span class="hl-nf">test</span><span class="hl-p">(</span>parts<span class="hl-p">[</span><span class="hl-m">3</span><span class="hl-p">]</span><span class="hl-p">)</span> <span class="hl-o">&amp;&amp;</span>
+  TIMINGS<span class="hl-p">.</span><span class="hl-nf">test</span><span class="hl-p">(</span>parts<span class="hl-p">[</span><span class="hl-m">4</span><span class="hl-p">]</span><span class="hl-p">)</span><span class="hl-p">;</span></code></pre>
+<p>The generation 3 token in header field 5 also appears inside the plaintext as <code>ver</code>, which is a cheap self-check that the body was decoded correctly.</p>
+<h2 id="the-cipher">The cipher</h2>
+<p>Two keyed passes, both driven by the same 23-bit LCG:</p>
+<pre class="highlight"><code class="lang-js"><span class="hl-k">const</span> step <span class="hl-o">=</span> <span class="hl-p">(</span>state<span class="hl-p">)</span> <span class="hl-o">=&gt;</span> <span class="hl-p">{</span>
+  <span class="hl-k">let</span> next <span class="hl-o">=</span> state <span class="hl-o">*</span> <span class="hl-m">65793</span><span class="hl-p">;</span>
+  next <span class="hl-o">&amp;=</span> <span class="hl-m">0xffffffff</span><span class="hl-p">;</span>
+  next <span class="hl-o">+=</span> <span class="hl-m">4282663</span><span class="hl-p">;</span>
+  next <span class="hl-o">&amp;=</span> <span class="hl-m">0x7fffff</span><span class="hl-p">;</span>
+  <span class="hl-k">return</span> next<span class="hl-p">;</span>
+<span class="hl-p">}</span><span class="hl-p">;</span>
+
+<span class="hl-k">const</span> draw <span class="hl-o">=</span> <span class="hl-p">(</span>state<span class="hl-p">)</span> <span class="hl-o">=&gt;</span> <span class="hl-p">(</span>state <span class="hl-o">&gt;&gt;</span> <span class="hl-m">8</span><span class="hl-p">)</span> <span class="hl-o">&amp;</span> <span class="hl-m">0xffff</span><span class="hl-p">;</span></code></pre>
+<p><strong>Substitution.</strong> The alphabet is codes 32 to 126 excluding <code>"</code> (34), <code>'</code> (39) and <code>\</code> (92), 92 characters. Every character in the alphabet is rotated forward by <code>draw % 92</code>, stepping the LCG once per input character; anything outside the alphabet passes through. Key is the substitution key from the header, which the sensor read out of <code>bm_sz</code>.</p>
+<p>Dropping <code>"</code> and <code>\</code> keeps the result safe inside a JSON string. <code>,</code> and <code>;</code> stay inside the alphabet, which is why framing has to be undone from the header outwards rather than by splitting.</p>
+<p><strong>Permutation.</strong> The body is split on a separator, then for each index in turn two positions are drawn and swapped:</p>
+<pre class="highlight"><code class="lang-js"><span class="hl-k">const</span> swaps <span class="hl-o">=</span> <span class="hl-p">(</span>count<span class="hl-p">,</span> key<span class="hl-p">)</span> <span class="hl-o">=&gt;</span> <span class="hl-p">{</span>
+  <span class="hl-k">const</span> pairs <span class="hl-o">=</span> <span class="hl-p">[</span><span class="hl-p">]</span><span class="hl-p">;</span>
+  <span class="hl-k">let</span> state <span class="hl-o">=</span> key<span class="hl-p">;</span>
+
+  <span class="hl-k">for</span> <span class="hl-p">(</span><span class="hl-k">let</span> index <span class="hl-o">=</span> <span class="hl-m">0</span><span class="hl-p">;</span> index <span class="hl-o">&lt;</span> count<span class="hl-p">;</span> index <span class="hl-o">+=</span> <span class="hl-m">1</span><span class="hl-p">)</span> <span class="hl-p">{</span>
+    <span class="hl-k">const</span> first <span class="hl-o">=</span> <span class="hl-nf">draw</span><span class="hl-p">(</span>state<span class="hl-p">)</span> <span class="hl-o">%</span> count<span class="hl-p">;</span>
+    state <span class="hl-o">=</span> <span class="hl-nf">step</span><span class="hl-p">(</span>state<span class="hl-p">)</span><span class="hl-p">;</span>
+    <span class="hl-k">const</span> second <span class="hl-o">=</span> <span class="hl-nf">draw</span><span class="hl-p">(</span>state<span class="hl-p">)</span> <span class="hl-o">%</span> count<span class="hl-p">;</span>
+    state <span class="hl-o">=</span> <span class="hl-nf">step</span><span class="hl-p">(</span>state<span class="hl-p">)</span><span class="hl-p">;</span>
+    pairs<span class="hl-p">.</span><span class="hl-nf">push</span><span class="hl-p">(</span><span class="hl-p">[</span>first<span class="hl-p">,</span> second<span class="hl-p">]</span><span class="hl-p">)</span><span class="hl-p">;</span>
+  <span class="hl-p">}</span>
+
+  <span class="hl-k">return</span> pairs<span class="hl-p">;</span>
+<span class="hl-p">}</span><span class="hl-p">;</span></code></pre>
+<p>The separator differs by generation: <code>,</code> for v2, <code>:</code> for v3. Undoing it is the same swap list replayed backwards.</p>
+<p>Decoding order is substitution first, which restores the real separators, then the permutation.</p>
+<p><strong>How it is detected:</strong> the edge applies the permutation with the build's own key and notices when the result is not what it expects. Measured against two production endpoints today, a payload re-encoded without the permutation, with everything else identical, is refused where the correct one is served. Same for a payload whose substitution key was moved by a constant. The edge is decrypting and reading, not shape-checking. See <a href="oracles.html">oracles</a>.</p>
+<h2 id="generation-2-plaintext">Generation 2 plaintext</h2>
+<p>Sections joined by a per-post random separator that itself contains commas. After a four-entry preamble the rest is strictly <code>&lt;code&gt;</code> then <code>&lt;data&gt;</code>, where codes are the negative integers the string table also carries.</p>
+<pre class="highlight"><code class="lang-text"><span class="hl-m">2</span> <span class="hl-nv">&lt;sep&gt;</span> <span class="hl-m">2</span> <span class="hl-nv">&lt;sep&gt;</span> <span class="hl-m">7a74</span><span class="hl-na">G7m23Vrp0o5c961547nSUuCfDMvBzj2S2zmHgqNw</span>== <span class="hl-nv">&lt;sep&gt;</span> <span class="hl-m">168332</span> <span class="hl-nv">&lt;sep&gt;</span> -<span class="hl-m">100</span> <span class="hl-nv">&lt;sep&gt;</span> …</code></pre>
+<p>Nothing transmits the separator. The plaintext starts with <code>2</code>, the separator, <code>2</code>, so the text between the first two <code>2</code>s is the separator, and any separator that does not collide with the body works. The generator that builds one draws 2 to 4 groups of 2 to 4 characters and retries on collision, from an alphabet that deliberately contains no <code>2</code>:</p>
+<pre class="highlight"><code class="lang-js"><span class="hl-k">const</span> SEPARATOR_ALPHABET <span class="hl-o">=</span> <span class="hl-s">"0134567890134567890134567890abcdefghijklmnopqrstuvwxyz"</span><span class="hl-p">;</span></code></pre>
+<p>Preamble entry 3 is a checksum over the joined body:</p>
+<pre class="highlight"><code class="lang-js"><span class="hl-k">const</span> checksum <span class="hl-o">=</span> <span class="hl-p">(</span>text<span class="hl-p">)</span> <span class="hl-o">=&gt;</span> <span class="hl-p">{</span>
+  <span class="hl-k">let</span> total <span class="hl-o">=</span> <span class="hl-m">0</span><span class="hl-p">;</span>
+  <span class="hl-k">for</span> <span class="hl-p">(</span><span class="hl-k">let</span> index <span class="hl-o">=</span> <span class="hl-m">0</span><span class="hl-p">;</span> index <span class="hl-o">&lt;</span> text<span class="hl-p">.</span>length<span class="hl-p">;</span> index <span class="hl-o">+=</span> <span class="hl-m">1</span><span class="hl-p">)</span> <span class="hl-p">{</span>
+    <span class="hl-k">const</span> code <span class="hl-o">=</span> text<span class="hl-p">.</span><span class="hl-nf">charCodeAt</span><span class="hl-p">(</span>index<span class="hl-p">)</span><span class="hl-p">;</span>
+    <span class="hl-k">if</span> <span class="hl-p">(</span>code <span class="hl-o">&lt;</span> <span class="hl-m">128</span><span class="hl-p">)</span> total <span class="hl-o">+=</span> code<span class="hl-p">;</span>
+  <span class="hl-p">}</span>
+  <span class="hl-k">return</span> total<span class="hl-p">;</span>
+<span class="hl-p">}</span><span class="hl-p">;</span>
+
+<span class="hl-k">const</span> stated <span class="hl-o">=</span> <span class="hl-nf">checksum</span><span class="hl-p">(</span>body<span class="hl-p">)</span> <span class="hl-o">^</span> <span class="hl-m">24</span><span class="hl-p">;</span></code></pre>
+<h2 id="generation-3-plaintext">Generation 3 plaintext</h2>
+<p>One JSON object with named keys, <code>ver</code> first, and two lists of single-key objects, <code>din</code> and <code>mst</code>, that carry most of the device and counter fields. Validation is structural: parse it, check <code>ver</code> is a string and matches the header token, check <code>din</code> and <code>mst</code> are lists of one-key objects. That is what makes an unshuffled or mis-keyed decode obvious to a reader as well as to the edge.</p>
+<h2 id="the-preamble-token">The preamble token</h2>
+<p>The 46-character value in the v2 preamble looks like a secret and is not one. It is two build constants and the current hour bucket, with only the digits rotated:</p>
+<pre class="highlight"><code class="lang-js"><span class="hl-k">const</span> dpt <span class="hl-o">=</span> <span class="hl-p">(</span>text<span class="hl-p">,</span> key<span class="hl-p">)</span> <span class="hl-o">=&gt;</span> <span class="hl-p">{</span> <span class="hl-c">/* rotate characters 48..57 by key charCode, letters untouched */</span> <span class="hl-p">}</span><span class="hl-p">;</span>
+
+<span class="hl-k">const</span> key <span class="hl-o">=</span> <span class="hl-nf">dpt</span><span class="hl-p">(</span><span class="hl-s">"0a46G5m17Vrp4o4c"</span><span class="hl-p">,</span> <span class="hl-s">"afSbep8yjnZUjq3aL010jO15Sawj2VZfdYK8uY90uxq"</span><span class="hl-p">)</span><span class="hl-p">.</span><span class="hl-nf">slice</span><span class="hl-p">(</span><span class="hl-m">0</span><span class="hl-p">,</span> <span class="hl-m">16</span><span class="hl-p">)</span><span class="hl-p">;</span>
+<span class="hl-k">const</span> token <span class="hl-o">=</span> key <span class="hl-o">+</span> <span class="hl-nf">dpt</span><span class="hl-p">(</span><span class="hl-nf">String</span><span class="hl-p">(</span><span class="hl-nb">Math</span><span class="hl-p">.</span><span class="hl-nf">floor</span><span class="hl-p">(</span><span class="hl-nb">Date</span><span class="hl-p">.</span><span class="hl-nf">now</span><span class="hl-p">(</span><span class="hl-p">)</span> <span class="hl-o">/</span> <span class="hl-m">3600000</span><span class="hl-p">)</span><span class="hl-p">)</span><span class="hl-p">,</span> key<span class="hl-p">)</span> <span class="hl-o">+</span> <span class="hl-s">"nSUuCfDMvBzj2S2zmHgqNw=="</span><span class="hl-p">;</span></code></pre>
+<p>For the v2 build studied, <code>key</code> is always <code>7a74G7m23Vrp0o5c</code>. Reproducing a captured payload's token from its timestamp alone gives back the same 46 characters, which is checked as a regression on every pinned capture.</p>
+<p><strong>How it is detected:</strong> it is an hour bucket, so a replayed payload from a previous hour carries a token that no longer matches the clock. That is one of several coarse time buckets in the payload; <a href="rotation.html">what rotates</a> lists the others.</p>
+<div class="pager"><a class="prev" href="proof-of-work.html">Proof of work</a>
+<a class="next" href="build-generations.html">Build generations</a></div>
+</main>
+</div>
+<div class="footer-content">
+Measured against live builds. Formats and constants rotate per build; re-measure before relying on any number here.
+</div>
+</body>
+</html>

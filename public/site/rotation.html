@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What rotates - Akamai Bot Manager internals</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">Akamai Bot Manager internals</a>
+  <span class="tagline">Measured notes on the sensor, the payload and the edge</span>
+</header>
+<div class="shell">
+<nav class="sidebar">
+<div class="group"><span class="group-title">Start here</span>
+<ul>
+<li class=""><a href="index.html">Overview</a></li>
+<li class=""><a href="edge-surface.html">Edge surface</a></li>
+<li class=""><a href="configuration.html">Script URL configuration</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The client</span>
+<ul>
+<li class=""><a href="sensor-script.html">The sensor script</a></li>
+<li class=""><a href="collection.html">What the sensor collects</a></li>
+<li class=""><a href="pixel-challenge.html">The pixel challenge</a></li>
+<li class=""><a href="proof-of-work.html">Proof of work</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The payload</span>
+<ul>
+<li class=""><a href="payload-format.html">sensor_data format</a></li>
+<li class=""><a href="build-generations.html">Build generations</a></li>
+<li class=""><a href="field-map.html">Where fields come from</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Detection</span>
+<ul>
+<li class=""><a href="automation-markers.html">Automation markers</a></li>
+<li class=""><a href="driven-input.html">Driven input tells</a></li>
+<li class=""><a href="transport.html">Transport fingerprints</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Working with it</span>
+<ul>
+<li class=""><a href="oracles.html">Oracles</a></li>
+<li class="active"><a href="rotation.html">What rotates</a>
+<ul class="sub"><li><a href="#the-script-url-per-path-and-per-day">The script URL, per path and per day</a></li><li><a href="#the-script-body-in-minutes">The script body, in minutes</a></li><li><a href="#the-delivery-style-itself">The delivery style itself</a></li><li><a href="#per-channel">Per channel</a></li><li><a href="#per-session">Per session</a></li><li><a href="#per-address-with-a-time-limit">Per address, with a time limit</a></li><li><a href="#per-tracking-number-or-whatever-the-endpoint-keys-its-cache-on">Per tracking number, or whatever the endpoint keys its cache on</a></li><li><a href="#time-buckets-inside-the-payload">Time buckets inside the payload</a></li></ul></li>
+<li class=""><a href="methodology.html">Methodology</a></li>
+</ul></div>
+</nav>
+<main>
+<h1 id="what-rotates">What rotates</h1>
+<p>Several things move independently of each other, and reading a stale one as current is how a measurement goes wrong quietly.</p>
+<h2 id="the-script-url-per-path-and-per-day">The script URL, per path and per day</h2>
+<p>The obfuscated path is not a stable identifier. On a generation 2 property sampled a day apart, the entire path changed while the script body did not: same byte count, same hash, different path and different config segment.</p>
+<pre class="highlight"><code class="lang-text">day <span class="hl-m">1</span>  /IswGlZdNh/…/EQD3VDE5EipOtziE/…      <span class="hl-m">209799</span> bytes
+day <span class="hl-m">2</span>  /bKPQf9papAAb/…/aYOGDfhYcEiODrXO/…   <span class="hl-m">209799</span> bytes<span class="hl-p">,</span> same hash</code></pre>
+<p>The same origin can also serve different segments on different paths at the same moment, differing in one config bit, with identical script bytes on all of them.</p>
+<p>So identify a build by the hash of its body. A survey keyed on the URL will count one build as several, and a cache keyed on the URL will serve the wrong answer after a rotation.</p>
+<h2 id="the-script-body-in-minutes">The script body, in minutes</h2>
+<p>Sampled at fifteen-minute intervals, two generation 3 properties served three distinct script hashes each inside 31 minutes, with sizes moving over a 20 KB to 60 KB range. A generation 2 build served one hash for an afternoon and the same hash the next day.</p>
+<p>The consequence is concrete: the generation 3 permutation key is a constant inside the build, so a key recovered from one fetch is worthless against a script fetched fifteen minutes later. Anything working against a live host has to fetch the script in the session that uses it. Pinned scripts are good for offline regression and nothing else.</p>
+<h2 id="the-delivery-style-itself">The delivery style itself</h2>
+<p>Two properties that named a full obfuscated sensor one day were serving only a 26.7 KB <code>/akam/13/&lt;hash&gt;</code> client the next. Treat a missing obfuscated path as a configuration that moved, not as a property that dropped Bot Manager.</p>
+<h2 id="per-channel">Per channel</h2>
+<p>The same build frames its payload differently depending on how it leaves the page:</p>
+<pre class="highlight"><code class="lang-text">posted sensor_data      <span class="hl-m">2</span><span class="hl-p">;</span><span class="hl-m">2048</span><span class="hl-p">;</span><span class="hl-m">3360065</span><span class="hl-p">;</span><span class="hl-m">3683384</span><span class="hl-p">;</span><span class="hl-m">26</span><span class="hl-p">,</span><span class="hl-m">0</span><span class="hl-p">,</span><span class="hl-m">0</span><span class="hl-p">,</span><span class="hl-m">1</span><span class="hl-p">,</span><span class="hl-m">1</span><span class="hl-p">,</span><span class="hl-m">0</span><span class="hl-p">;</span><span class="hl-nv">&lt;body&gt;</span>
+bmak.get_telemetry()    <span class="hl-m">2</span><span class="hl-p">;</span><span class="hl-m">3228209</span><span class="hl-p">;</span><span class="hl-m">4601909</span><span class="hl-p">;</span><span class="hl-m">9</span><span class="hl-p">,</span><span class="hl-m">0</span><span class="hl-p">,</span><span class="hl-m">0</span><span class="hl-p">,</span><span class="hl-m">1</span><span class="hl-p">,</span><span class="hl-m">3</span><span class="hl-p">,</span><span class="hl-m">1</span><span class="hl-p">;</span><span class="hl-nv">&lt;body&gt;</span></code></pre>
+<p>The header form has no bitmask field, so it has four header fields where the posted form has five. Any parser that assumed a fixed header length was wrong for one of the two.</p>
+<h2 id="per-session">Per session</h2>
+<p><code>_abck</code>, <code>bm_sz</code> and <code>ak_bmsc</code> are set on the first page load, and <code>_abck</code> is re-issued as the session goes on. A captured telemetry header from a session minutes old is refused where one built from the current cookies is served, so a replayed header measures replay handling and not payload quality.</p>
+<h2 id="per-address-with-a-time-limit">Per address, with a time limit</h2>
+<p>An endpoint that has served an address can keep answering it for a while, including requests it refused minutes earlier. That is why arms are ordered most-refusable-first and why a served answer only means something as the first request a cold client makes. Refusals stay meaningful throughout, because deny is computed per request rather than served from cache.</p>
+<h2 id="per-tracking-number-or-whatever-the-endpoint-keys-its-cache-on">Per tracking number, or whatever the endpoint keys its cache on</h2>
+<p>An endpoint's success response can be cached on the identifier in the request. Repeating the identifier answers from cache without the edge judging anything, and the giveaway is an identical <code>id</code> in the response body. Randomise it per run.</p>
+<h2 id="time-buckets-inside-the-payload">Time buckets inside the payload</h2>
+<p>Two payload fields are coarse clock buckets, and both age out of a stored capture:</p>
+<table>
+<thead><tr><th>field</th><th>divisor</th><th>steps about every</th></tr></thead>
+<tbody>
+<tr><td><code>hz1</code></td><td>4,064,256 ms</td><td>68 minutes</td></tr>
+<tr><td><code>dd2</code></td><td>93,477,888 ms</td><td>26 hours</td></tr>
+</tbody>
+</table>
+<p>Both are stable inside one session, so they read as matches indefinitely if you only ever compare live runs. A replayed capture differs by one or two, which is the clock, not a defect, and a comparison tool has to tolerate them on replay and refuse to tolerate them live.</p>
+<p>The generation 2 preamble token carries a third one: the current hour bucket, digits rotated by a build constant.</p>
+<div class="pager"><a class="prev" href="oracles.html">Oracles</a>
+<a class="next" href="methodology.html">Methodology</a></div>
+</main>
+</div>
+<div class="footer-content">
+Measured against live builds. Formats and constants rotate per build; re-measure before relying on any number here.
+</div>
+</body>
+</html>

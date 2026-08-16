@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oracles - Akamai Bot Manager internals</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">Akamai Bot Manager internals</a>
+  <span class="tagline">Measured notes on the sensor, the payload and the edge</span>
+</header>
+<div class="shell">
+<nav class="sidebar">
+<div class="group"><span class="group-title">Start here</span>
+<ul>
+<li class=""><a href="index.html">Overview</a></li>
+<li class=""><a href="edge-surface.html">Edge surface</a></li>
+<li class=""><a href="configuration.html">Script URL configuration</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The client</span>
+<ul>
+<li class=""><a href="sensor-script.html">The sensor script</a></li>
+<li class=""><a href="collection.html">What the sensor collects</a></li>
+<li class=""><a href="pixel-challenge.html">The pixel challenge</a></li>
+<li class=""><a href="proof-of-work.html">Proof of work</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The payload</span>
+<ul>
+<li class=""><a href="payload-format.html">sensor_data format</a></li>
+<li class=""><a href="build-generations.html">Build generations</a></li>
+<li class=""><a href="field-map.html">Where fields come from</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Detection</span>
+<ul>
+<li class=""><a href="automation-markers.html">Automation markers</a></li>
+<li class=""><a href="driven-input.html">Driven input tells</a></li>
+<li class=""><a href="transport.html">Transport fingerprints</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Working with it</span>
+<ul>
+<li class="active"><a href="oracles.html">Oracles</a>
+<ul class="sub"><li><a href="#a-login-post-that-reads-the-payload">A login POST that reads the payload</a></li><li><a href="#a-tracking-api-that-judges-a-header">A tracking API that judges a header</a></li><li><a href="#traps">Traps</a></li><li><a href="#what-a-pass-does-and-does-not-say">What a pass does and does not say</a></li></ul></li>
+<li class=""><a href="rotation.html">What rotates</a></li>
+<li class=""><a href="methodology.html">Methodology</a></li>
+</ul></div>
+</nav>
+<main>
+<h1 id="oracles">Oracles</h1>
+<p>Nothing on the sensor endpoint tells you whether a payload was believed. It answers <code>201 {"success": true}</code> to a correct payload, to the word <code>garbage</code>, and to a body with half of it cut off. To learn anything you need an endpoint whose answer depends on the payload, and a control arm proving it can still refuse.</p>
+<p>Arms used throughout, each a fresh session ending in exactly one judged request:</p>
+<table>
+<thead><tr><th>arm</th><th>what it sends</th></tr></thead>
+<tbody>
+<tr><td><code>none</code></td><td>the sensor script is never fetched or run</td></tr>
+<tr><td><code>garbage</code></td><td>the correct header with the word <code>garbage</code> as the body</td></tr>
+<tr><td><code>truncated</code></td><td>the payload with half its body cut off</td></tr>
+<tr><td><code>wrongkey</code></td><td>the payload with its substitution key moved by a constant</td></tr>
+<tr><td><code>unshuffled</code></td><td>the same plaintext re-encoded without the field permutation</td></tr>
+<tr><td><code>dirty</code></td><td>the payload with the automation mask set by hand</td></tr>
+<tr><td><code>plain</code></td><td>what the sandbox builds from the script the edge just served</td></tr>
+</tbody>
+</table>
+<p>Order matters: put the most refusable arm first, because a served request can grant the address slack for a while afterwards.</p>
+<h2 id="a-login-post-that-reads-the-payload">A login POST that reads the payload</h2>
+<p>A generation 3 login endpoint, form-posted with a username that cannot exist. Six arms, one session each:</p>
+<table>
+<thead><tr><th>arm</th><th>sensor post</th><th>login answer</th></tr></thead>
+<tbody>
+<tr><td><code>none</code></td><td>nothing posted</td><td><strong>403</strong> Access Denied</td></tr>
+<tr><td><code>garbage</code></td><td>201, 7 bytes</td><td><strong>403</strong></td></tr>
+<tr><td><code>wrongkey</code></td><td>201, 1650 bytes</td><td><strong>403</strong></td></tr>
+<tr><td><code>unshuffled</code></td><td>201, 1656 bytes</td><td><strong>403</strong></td></tr>
+<tr><td><code>dirty</code></td><td>201, 1676 bytes</td><td><strong>200</strong>, served</td></tr>
+<tr><td><code>plain</code></td><td>201, 1645 bytes</td><td><strong>200</strong>, credential error page</td></tr>
+</tbody>
+</table>
+<p><code>wrongkey</code> is the arm that matters. Same length, same framing, same header, and only the decoded contents differ. The edge tells it apart from the correct payload, which means it is decrypting and reading, not shape-checking. <code>unshuffled</code> agrees: intact plaintext, wrong field order, refused.</p>
+<p><code>dirty</code> is the informative exception. The automation mask, the field a driven browser sets on itself, is served. This gate reads whether the payload decodes into a coherent session, not what the session admits about itself.</p>
+<p>Two details worth keeping. The sensor collection endpoint answered <code>201</code> to every arm including <code>garbage</code>, so it carries no verdict. And <code>_abck</code> stayed unvalidated through all of it, including the arms that passed, so whatever the login endpoint reads, it is not that cookie's state.</p>
+<h2 id="a-tracking-api-that-judges-a-header">A tracking API that judges a header</h2>
+<p>A generation 2 property exposes a tracking API that takes the payload in an <code>akamai-bm-telemetry</code> request header rather than a cookie. It is cross-origin and carries no cookies, so the header is the only evidence the edge has. A tracking number that does not exist answers <strong>404 when the edge believes the caller</strong> and <strong>403 Access Denied when it does not</strong>, which makes it queryable without spending anything.</p>
+<p>Four arms in one browserless session, most refusable first:</p>
+<table>
+<thead><tr><th>arm</th><th>payload bytes</th><th>answer</th></tr></thead>
+<tbody>
+<tr><td><code>garbage</code></td><td>7</td><td>403 refused</td></tr>
+<tr><td><code>wrongkey</code></td><td>3109</td><td>403 refused</td></tr>
+<tr><td><code>unshuffled</code></td><td>3102</td><td>403 refused</td></tr>
+<tr><td><code>plain</code></td><td>3109</td><td>404 served</td></tr>
+</tbody>
+</table>
+<p>The whole run has no browser in it: fetch the page, read the sensor script URL out of the HTML, fetch that script, run it against a recorded environment snapshot retargeted to the live URL and the cookies the edge just set, then send what <code>bmak.get_telemetry()</code> produced. The payload check and the handshake are separable and both are met from a Node process.</p>
+<h2 id="traps">Traps</h2>
+<p><strong>The <code>404</code> is cached per tracking number.</strong> A repeated number answers from cache and never reaches the edge's judgement, and the giveaway is an identical <code>id</code> in the response body. Use a random number per run. Denies are not cached; a refused request is refused even when the same number was served a moment earlier.</p>
+<p><strong>A served request can buy the address slack.</strong> On one earlier session the endpoint went from refusing garbage to answering everything, including a request with no telemetry header at all, minutes after a good payload had been served. Measure the payload with the first request a cold client makes. A <code>403</code> is meaningful whenever it appears; a <code>404</code> only means something cold.</p>
+<p><strong>Post counts have to match.</strong> On endpoints where the signal is the length of <code>_abck</code> field 2 after a post, that field grows with the number of posts the edge accepted. An arm that leaves the site's own sensor running posts a dozen times and reads a completely different length, which is not a third verdict, it is a different experiment.</p>
+<p><strong>An <code>unshuffled</code> arm needs a recovered key.</strong> If the build's permutation key was never settled, re-encoding without the permutation is a no-op, and the arm quietly posts the correct payload and reads as a pass. Report that arm as not built rather than running it.</p>
+<p><strong>A username in email form can draw its own refusal.</strong> On one login endpoint, every attempt with an <code>@</code> in the username was refused while the same code with a plain word was answered normally. That is indistinguishable from a bot verdict and cost a session to isolate.</p>
+<p><strong>Endpoints stop answering under repetition.</strong> After roughly a dozen failed submits from one address inside forty minutes, one login endpoint answered 403 to every arm, including the arm with the site's own sensor running untouched. Re-establish the baseline with a known-good arm before reading anything into a refusal.</p>
+<h2 id="what-a-pass-does-and-does-not-say">What a pass does and does not say</h2>
+<p>Two production endpoints, on different builds and different generations, refuse a payload with a moved key and serve the one built offline from the script they just served. That says the payload is good enough for those endpoints over a Chrome-shaped handshake.</p>
+<p>It does not say the payload would survive a different build, a fresh address, or a property that scores rather than gates. The environment snapshot the sandbox replays is doing work that has not been measured: nothing here establishes how much of the environment can be synthesised rather than recorded from a real machine.</p>
+<div class="pager"><a class="prev" href="transport.html">Transport fingerprints</a>
+<a class="next" href="rotation.html">What rotates</a></div>
+</main>
+</div>
+<div class="footer-content">
+Measured against live builds. Formats and constants rotate per build; re-measure before relying on any number here.
+</div>
+</body>
+</html>

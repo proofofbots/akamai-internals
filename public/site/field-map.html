@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Where fields come from - Akamai Bot Manager internals</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">Akamai Bot Manager internals</a>
+  <span class="tagline">Measured notes on the sensor, the payload and the edge</span>
+</header>
+<div class="shell">
+<nav class="sidebar">
+<div class="group"><span class="group-title">Start here</span>
+<ul>
+<li class=""><a href="index.html">Overview</a></li>
+<li class=""><a href="edge-surface.html">Edge surface</a></li>
+<li class=""><a href="configuration.html">Script URL configuration</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The client</span>
+<ul>
+<li class=""><a href="sensor-script.html">The sensor script</a></li>
+<li class=""><a href="collection.html">What the sensor collects</a></li>
+<li class=""><a href="pixel-challenge.html">The pixel challenge</a></li>
+<li class=""><a href="proof-of-work.html">Proof of work</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The payload</span>
+<ul>
+<li class=""><a href="payload-format.html">sensor_data format</a></li>
+<li class=""><a href="build-generations.html">Build generations</a></li>
+<li class="active"><a href="field-map.html">Where fields come from</a>
+<ul class="sub"><li><a href="#generation-3-by-name">Generation 3, by name</a></li><li><a href="#generation-2-by-section-code">Generation 2, by section code</a></li><li><a href="#the-derived-block">The derived block</a></li><li><a href="#volatile-aged-and-stable">Volatile, aged and stable</a></li></ul></li>
+</ul></div>
+<div class="group"><span class="group-title">Detection</span>
+<ul>
+<li class=""><a href="automation-markers.html">Automation markers</a></li>
+<li class=""><a href="driven-input.html">Driven input tells</a></li>
+<li class=""><a href="transport.html">Transport fingerprints</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Working with it</span>
+<ul>
+<li class=""><a href="oracles.html">Oracles</a></li>
+<li class=""><a href="rotation.html">What rotates</a></li>
+<li class=""><a href="methodology.html">Methodology</a></li>
+</ul></div>
+</nav>
+<main>
+<h1 id="where-fields-come-from">Where fields come from</h1>
+<p>Every field of a decoded payload can be traced back to the browser property, literal or counter that produced it, by instrumenting the script as served and walking each field's expression backwards through what the run actually computed.</p>
+<h2 id="generation-3-by-name">Generation 3, by name</h2>
+<p>The plaintext is one JSON object. Device facts live under <code>din</code>, counters and timing under <code>mst</code>, with a handful of top-level fields.</p>
+<table>
+<thead><tr><th>field</th><th>source</th></tr></thead>
+<tbody>
+<tr><td><code>ver</code></td><td>build constant, the same base64 the header carries</td></tr>
+<tr><td><code>din.ua</code>, <code>din.ucs</code></td><td><code>navigator.userAgent</code>, and a length or checksum over it</td></tr>
+<tr><td><code>din.nal</code>, <code>din.nap</code>, <code>din.nps</code></td><td><code>navigator.language</code>, <code>product</code>, <code>productSub</code></td></tr>
+<tr><td><code>din.npl</code></td><td><code>navigator.plugins.length</code></td></tr>
+<tr><td><code>din.wiw</code>, <code>din.wih</code>, <code>din.wow</code></td><td><code>window.innerWidth</code>, <code>innerHeight</code>, <code>outerWidth</code></td></tr>
+<tr><td><code>din.swi</code>, <code>din.she</code>, <code>din.asw</code>, <code>din.ash</code></td><td>the four <code>screen</code> dimensions</td></tr>
+<tr><td><code>din.wdr</code></td><td><code>window.webdriver</code></td></tr>
+<tr><td><code>din.pha</code></td><td><code>window._phantom</code></td></tr>
+<tr><td><code>din.dau</code></td><td><code>window.domAutomation</code></td></tr>
+<tr><td><code>din.adp</code></td><td>the marker list, <code>cpen</code>, <code>i1</code>, <code>dm</code>, <code>cwen</code>, <code>non</code>, <code>opc</code>, <code>fc</code>, <code>sc</code>, <code>wrc</code>, <code>isc</code>, <code>vib</code>, <code>bat</code>, <code>x11</code>, <code>x12</code></td></tr>
+<tr><td><code>din.xag</code></td><td>a 14-bit capability mask over <code>DeviceOrientationEvent</code>, <code>DeviceMotionEvent</code>, <code>TouchEvent</code>, <code>PointerEvent</code>, <code>window.chrome</code> and window dimensions</td></tr>
+<tr><td><code>din.hz1</code>, <code>din.hal</code></td><td>derived from <code>bmak.startTs</code></td></tr>
+<tr><td><code>din.ran</code></td><td>a <code>Math.random</code> sample</td></tr>
+<tr><td><code>fpt</code>, <code>fpc</code></td><td>the feature and timezone string, and a murmur over it</td></tr>
+<tr><td><code>sde</code></td><td>probes including <code>$cdc_asdjflasutopfhvcZLmcfl_</code> on <code>window</code> and <code>document</code></td></tr>
+<tr><td><code>eem</code></td><td>which event constructors exist</td></tr>
+<tr><td><code>ajr</code></td><td>the derived block, see below</td></tr>
+<tr><td><code>pur</code></td><td><code>document.URL</code></td></tr>
+<tr><td><code>ffl</code></td><td>a path segment of the sensor script URL, read from <code>document.currentScript</code></td></tr>
+<tr><td><code>mst.delt</code>, <code>mst.ssts</code>, <code>mst.sts</code>, <code>mst.dd2</code></td><td>elapsed milliseconds and buckets from <code>bmak.startTs</code></td></tr>
+<tr><td><code>mst.kev</code>, <code>mst.mev</code>, <code>mst.pev</code>, <code>mst.tev</code>, <code>mst.oev</code></td><td>keyboard, mouse, pointer, touch and orientation event counters</td></tr>
+<tr><td><code>mst.kc</code>, <code>mst.mc</code>, <code>mst.pc</code>, <code>mst.tc</code></td><td>the matching per-class counts</td></tr>
+<tr><td><code>mst.tst</code></td><td>accumulates on <code>touchmove</code> and <code>touchend</code></td></tr>
+<tr><td><code>mst.jsrf</code></td><td>the literal <code>PiZtE</code></td></tr>
+<tr><td><code>mst.rval</code>, <code>mst.rcfp</code></td><td>fingerprint values computed in the device block</td></tr>
+<tr><td><code>mst.nfas</code></td><td>a 25-bit mask over <code>navigator.getGamepads</code>, <code>registerProtocolHandler</code>, <code>requestMediaKeySystemAccess</code>, <code>requestWakeLock</code> and others</td></tr>
+<tr><td><code>mst.tid</code></td><td><code>sessionStorage.getItem</code></td></tr>
+<tr><td><code>tab</code></td><td>a bitmask ORed on <code>keydown</code></td></tr>
+<tr><td><code>ffs</code>, <code>inf</code></td><td>the form inventory, one entry per <code>input</code>, <code>textarea</code> and <code>select</code></td></tr>
+</tbody>
+</table>
+<p>Fields whose chain ends at a literal are the interesting ones for anyone reproducing a build, because they are the values that must come from the script rather than the environment: <code>din.ibr</code>, <code>din.tsd</code>, <code>o9</code>, <code>mis</code>, <code>og</code>, <code>per</code>, <code>mst.it</code>, <code>mst.signals</code>, <code>ajt</code> are all constants on a clean desktop run.</p>
+<h2 id="generation-2-by-section-code">Generation 2, by section code</h2>
+<p>Positional sections, one code then one data block, joined by the per-post separator.</p>
+<table>
+<thead><tr><th>code</th><th>contents</th></tr></thead>
+<tbody>
+<tr><td><code>-100</code></td><td>device and screen block: user agent, <code>uaend</code>, capability integer, <code>productSub</code>, language, product, plugin count, screen and window dimensions, then the <code>cpen:</code> … <code>x12:</code> flags</td></tr>
+<tr><td><code>-101</code></td><td>event support names, <code>do_en,dm_en,t_en</code></td></tr>
+<tr><td><code>-102</code>, <code>-105</code></td><td>pointer or touch event log, <code>;</code>-terminated tuples, duplicated on desktop</td></tr>
+<tr><td><code>-106</code></td><td>counters</td></tr>
+<tr><td><code>-112</code></td><td>document URL</td></tr>
+<tr><td><code>-115</code></td><td>session block: counters, timestamps, the <code>_abck</code> cookie verbatim, the <code>PiZtE</code> literal</td></tr>
+<tr><td><code>-116</code>, <code>-119</code>, <code>-127</code>, <code>-70</code>, <code>-80</code></td><td>single integers</td></tr>
+<tr><td><code>-122</code></td><td>seven flags, three of which report automation</td></tr>
+<tr><td><code>-129</code></td><td>a 64 hex build constant and trailing fields</td></tr>
+<tr><td><code>-131</code>, <code>-132</code></td><td>feature flags in fourteen and five fields</td></tr>
+<tr><td><code>-134</code></td><td>tail, a 40 hex value and a count</td></tr>
+<tr><td><code>-103</code>, <code>-108</code> to <code>-111</code>, <code>-114</code>, <code>-117</code>, <code>-123</code>, <code>-124</code>, <code>-126</code>, <code>-133</code></td><td>empty on desktop, mobile or unrun code paths</td></tr>
+</tbody>
+</table>
+<p>Inside <code>-115</code>, indices 0, 1 and 2 are event counters offset by 1, 32 and 32, index 5 is a fourth counter, index 6 sums them, index 7 is milliseconds since <code>bmak.startTs</code>, index 9 is <code>startTs</code> itself, index 20 is the <code>_abck</code> cookie verbatim and index 21 is the sum of its character codes below 128.</p>
+<p><strong>How it is detected:</strong> the counters and the event logs are the same fact reported twice. A payload whose logs show four pointer events and whose counters say none is inconsistent on its face, and the offsets mean the counters cannot simply be zeroed.</p>
+<h2 id="the-derived-block">The derived block</h2>
+<p>Generation 2 calls it <code>-90</code>, generation 3 calls it <code>ajr</code>. It is a computation check rather than a fact: pick a random line from the pointer log, sum the integers on it, factorise the sum keeping at most six divisors, and emit <code>divisors | line index | the line's values</code>.</p>
+<p>With no pointer data at all the script fabricates five numbers instead, <code>random(1,5)</code>, <code>1</code>, <code>random(20,70)</code>, <code>random(100,300)</code>, <code>random(100,300)</code>, and reports the line index as <code>-1</code>:</p>
+<pre class="highlight"><code class="lang-text"><span class="hl-m">1</span><span class="hl-p">,</span><span class="hl-m">445</span><span class="hl-p">,</span><span class="hl-m">5</span><span class="hl-p">,</span><span class="hl-m">89</span><span class="hl-p">|</span>-<span class="hl-m">1</span><span class="hl-p">|</span><span class="hl-m">2</span><span class="hl-p">,</span><span class="hl-m">1</span><span class="hl-p">,</span><span class="hl-m">31</span><span class="hl-p">,</span><span class="hl-m">156</span><span class="hl-p">,</span><span class="hl-m">255</span></code></pre>
+<p><code>2 + 1 + 31 + 156 + 255</code> is 445, whose divisors are 1, 5, 89 and 445.</p>
+<p><strong>How it is detected:</strong> the block is checkable against itself with no other information. A payload whose stated divisors do not factorise its own stated values is wrong on inspection, and a <code>-1</code> index says plainly that the client had no pointer input.</p>
+<h2 id="volatile-aged-and-stable">Volatile, aged and stable</h2>
+<p>Not every difference between two payloads is a defect. Fields that differ between two real posts of one real session are volatile by measurement, not by opinion: <code>ajr</code>, <code>delt</code>, <code>ssts</code>, <code>sts</code>, <code>hal</code>, <code>hz1</code>, <code>ran</code>, <code>tst</code>, <code>kev</code>, <code>mev</code>, <code>pev</code>, <code>tev</code>, <code>oev</code>, <code>dvc</code>, <code>fct</code>, <code>tid</code>, <code>tovl</code>, <code>fmz</code>, and in generation 2 the timing header field, <code>-80</code>, <code>-90</code>, <code>-106</code>, <code>-127</code>, <code>-129</code> and several <code>-115</code> indices.</p>
+<p>Two fields are coarse clock buckets that age out of any stored capture:</p>
+<table>
+<thead><tr><th>field</th><th>divisor</th><th>steps about every</th></tr></thead>
+<tbody>
+<tr><td><code>hz1</code></td><td>4,064,256 ms</td><td>68 minutes</td></tr>
+<tr><td><code>dd2</code></td><td>93,477,888 ms</td><td>26 hours</td></tr>
+</tbody>
+</table>
+<p>Both are stable within one session, so they read as matches for as long as you only compare live runs. A capture replayed hours later differs by one, and that is the clock, not the client.</p>
+<div class="pager"><a class="prev" href="build-generations.html">Build generations</a>
+<a class="next" href="automation-markers.html">Automation markers</a></div>
+</main>
+</div>
+<div class="footer-content">
+Measured against live builds. Formats and constants rotate per build; re-measure before relying on any number here.
+</div>
+</body>
+</html>

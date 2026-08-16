@@ -1,0 +1,43 @@
+[
+  {
+    "group": "Start here",
+    "items": [
+      { "slug": "index", "title": "Overview" },
+      { "slug": "edge-surface", "title": "Edge surface" },
+      { "slug": "configuration", "title": "Script URL configuration" }
+    ]
+  },
+  {
+    "group": "The client",
+    "items": [
+      { "slug": "sensor-script", "title": "The sensor script" },
+      { "slug": "collection", "title": "What the sensor collects" },
+      { "slug": "pixel-challenge", "title": "The pixel challenge" },
+      { "slug": "proof-of-work", "title": "Proof of work" }
+    ]
+  },
+  {
+    "group": "The payload",
+    "items": [
+      { "slug": "payload-format", "title": "sensor_data format" },
+      { "slug": "build-generations", "title": "Build generations" },
+      { "slug": "field-map", "title": "Where fields come from" }
+    ]
+  },
+  {
+    "group": "Detection",
+    "items": [
+      { "slug": "automation-markers", "title": "Automation markers" },
+      { "slug": "driven-input", "title": "Driven input tells" },
+      { "slug": "transport", "title": "Transport fingerprints" }
+    ]
+  },
+  {
+    "group": "Working with it",
+    "items": [
+      { "slug": "oracles", "title": "Oracles" },
+      { "slug": "rotation", "title": "What rotates" },
+      { "slug": "methodology", "title": "Methodology" }
+    ]
+  }
+]

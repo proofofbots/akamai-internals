@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Edge surface - Akamai Bot Manager internals</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">Akamai Bot Manager internals</a>
+  <span class="tagline">Measured notes on the sensor, the payload and the edge</span>
+</header>
+<div class="shell">
+<nav class="sidebar">
+<div class="group"><span class="group-title">Start here</span>
+<ul>
+<li class=""><a href="index.html">Overview</a></li>
+<li class="active"><a href="edge-surface.html">Edge surface</a>
+<ul class="sub"><li><a href="#finding-the-sensor-in-a-document">Finding the sensor in a document</a></li><li><a href="#telemetry-on-the-same-url">Telemetry on the same URL</a></li><li><a href="#cookies">Cookies</a></li><li><a href="#sibling-hosts">Sibling hosts</a></li></ul></li>
+<li class=""><a href="configuration.html">Script URL configuration</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The client</span>
+<ul>
+<li class=""><a href="sensor-script.html">The sensor script</a></li>
+<li class=""><a href="collection.html">What the sensor collects</a></li>
+<li class=""><a href="pixel-challenge.html">The pixel challenge</a></li>
+<li class=""><a href="proof-of-work.html">Proof of work</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The payload</span>
+<ul>
+<li class=""><a href="payload-format.html">sensor_data format</a></li>
+<li class=""><a href="build-generations.html">Build generations</a></li>
+<li class=""><a href="field-map.html">Where fields come from</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Detection</span>
+<ul>
+<li class=""><a href="automation-markers.html">Automation markers</a></li>
+<li class=""><a href="driven-input.html">Driven input tells</a></li>
+<li class=""><a href="transport.html">Transport fingerprints</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Working with it</span>
+<ul>
+<li class=""><a href="oracles.html">Oracles</a></li>
+<li class=""><a href="rotation.html">What rotates</a></li>
+<li class=""><a href="methodology.html">Methodology</a></li>
+</ul></div>
+</nav>
+<main>
+<h1 id="edge-surface">Edge surface</h1>
+<p>Everything Bot Manager exposes sits on the customer origin, so identification means recognising URL shape, cookie shape and script content.</p>
+<h2 id="finding-the-sensor-in-a-document">Finding the sensor in a document</h2>
+<p>Two injection styles appear, sometimes in the same page. The documented one is <code>/akam/&lt;generation&gt;/&lt;hash&gt;</code>, with an 8 hex character hash and a matching <code>pixel_&lt;hash&gt;?a=&lt;base64&gt;</code> sibling. The live one on current configurations is an opaque multi-segment path with nothing recognisable in it.</p>
+<p>The opaque path is found by shape, not by name: four or more segments, every segment 2 to 24 characters of <code>[A-Za-z0-9_-]</code>, no file extension, and not under <code>/akam/</code>.</p>
+<pre class="highlight"><code class="lang-js"><span class="hl-k">const</span> looksObfuscated <span class="hl-o">=</span> <span class="hl-p">(</span>href<span class="hl-p">)</span> <span class="hl-o">=&gt;</span> <span class="hl-p">{</span>
+  <span class="hl-k">const</span> path <span class="hl-o">=</span> href<span class="hl-p">.</span><span class="hl-nf">startsWith</span><span class="hl-p">(</span><span class="hl-s">"http"</span><span class="hl-p">)</span> <span class="hl-o">?</span> <span class="hl-k">new</span> <span class="hl-nf">URL</span><span class="hl-p">(</span>href<span class="hl-p">)</span><span class="hl-p">.</span><span class="hl-na">pathname</span> <span class="hl-p">:</span> href<span class="hl-p">;</span>
+  <span class="hl-k">const</span> segments <span class="hl-o">=</span> path<span class="hl-p">.</span><span class="hl-nf">split</span><span class="hl-p">(</span><span class="hl-s">"/"</span><span class="hl-p">)</span><span class="hl-p">.</span><span class="hl-nf">filter</span><span class="hl-p">(</span><span class="hl-nb">Boolean</span><span class="hl-p">)</span><span class="hl-p">;</span>
+
+  <span class="hl-k">if</span> <span class="hl-p">(</span>segments<span class="hl-p">.</span>length <span class="hl-o">&lt;</span> <span class="hl-m">4</span><span class="hl-p">)</span> <span class="hl-k">return</span> <span class="hl-kc">false</span><span class="hl-p">;</span>
+  <span class="hl-k">if</span> <span class="hl-p">(</span><span class="hl-o">/</span>\<span class="hl-p">.</span><span class="hl-p">[</span>a<span class="hl-o">-</span>z0<span class="hl-o">-</span><span class="hl-m">9</span><span class="hl-p">]</span><span class="hl-p">{</span><span class="hl-m">2</span><span class="hl-p">,</span><span class="hl-m">4</span><span class="hl-p">}</span>$<span class="hl-o">/</span>i<span class="hl-p">.</span><span class="hl-nf">test</span><span class="hl-p">(</span>path<span class="hl-p">)</span><span class="hl-p">)</span> <span class="hl-k">return</span> <span class="hl-kc">false</span><span class="hl-p">;</span>
+  <span class="hl-k">if</span> <span class="hl-p">(</span>path<span class="hl-p">.</span><span class="hl-nf">includes</span><span class="hl-p">(</span><span class="hl-s">"/akam/"</span><span class="hl-p">)</span><span class="hl-p">)</span> <span class="hl-k">return</span> <span class="hl-kc">false</span><span class="hl-p">;</span>
+
+  <span class="hl-k">return</span> segments<span class="hl-p">.</span><span class="hl-nf">every</span><span class="hl-p">(</span><span class="hl-p">(</span>segment<span class="hl-p">)</span> <span class="hl-o">=&gt;</span> <span class="hl-o">/^</span><span class="hl-p">[</span>A<span class="hl-o">-</span>Za<span class="hl-o">-</span>z0<span class="hl-o">-</span><span class="hl-m">9_</span><span class="hl-o">-</span><span class="hl-p">]</span><span class="hl-p">{</span><span class="hl-m">2</span><span class="hl-p">,</span><span class="hl-m">24</span><span class="hl-p">}</span>$<span class="hl-o">/</span><span class="hl-p">.</span><span class="hl-nf">test</span><span class="hl-p">(</span>segment<span class="hl-p">)</span><span class="hl-p">)</span><span class="hl-p">;</span>
+<span class="hl-p">}</span><span class="hl-p">;</span></code></pre>
+<p>The other side of the check is content: the sensor's body mentions <code>bmak</code> many times, which separates it from every other script on a typical page. Both checks matter, because the same document can carry an opaque sensor path and an <code>/akam/13/&lt;hash&gt;</code> tag that is the pixel client, not the sensor.</p>
+<p><strong>How it is detected:</strong> nothing here detects a client, but getting it wrong is how surveys go wrong. Filtering on <code>/akam/</code> misses every current property, and identifying a build by its URL double-counts, because the path rotates while the script body stays put. See <a href="rotation.html">what rotates</a>.</p>
+<h2 id="telemetry-on-the-same-url">Telemetry on the same URL</h2>
+<p>The sensor posts to the path it was served from. <code>POST</code>, <code>content-type: application/json</code>, one key:</p>
+<pre class="highlight"><code class="lang-json"><span class="hl-p">{</span> <span class="hl-na">"sensor_data"</span><span class="hl-p">:</span> <span class="hl-s">"2;2048;4338485;3553350;19,0,0,0,1,0;&lt;ciphertext&gt;"</span> <span class="hl-p">}</span></code></pre>
+<p>The answer is <code>201 {"success": true}</code>. Because the GET and the POST share a URL, a filter on the request URL cannot tell the script fetch from the telemetry; split them by method.</p>
+<p>That <code>201</code> is not a verdict. Measured on a production endpoint, it comes back for a correctly built payload, for the word <code>garbage</code>, for a truncated body and for one whose key has been moved. On the same session the <code>_abck</code> cookie stays unvalidated throughout. Anything reading success from that status is reading a constant.</p>
+<h2 id="cookies">Cookies</h2>
+<p>The names worth watching, and the prefix rule that catches the rest:</p>
+<pre class="highlight"><code class="lang-js"><span class="hl-k">const</span> AKAMAI_COOKIES <span class="hl-o">=</span> <span class="hl-p">[</span><span class="hl-s">"_abck"</span><span class="hl-p">,</span> <span class="hl-s">"bm_sz"</span><span class="hl-p">,</span> <span class="hl-s">"ak_bmsc"</span><span class="hl-p">,</span> <span class="hl-s">"bm_sv"</span><span class="hl-p">,</span> <span class="hl-s">"bm_mi"</span><span class="hl-p">,</span> <span class="hl-s">"bm_so"</span><span class="hl-p">,</span> <span class="hl-s">"bm_s"</span><span class="hl-p">,</span> <span class="hl-s">"bm_lso"</span><span class="hl-p">,</span> <span class="hl-s">"sec_cpt"</span><span class="hl-p">]</span><span class="hl-p">;</span>
+<span class="hl-k">const</span> isAkamaiCookie <span class="hl-o">=</span> <span class="hl-p">(</span>name<span class="hl-p">)</span> <span class="hl-o">=&gt;</span> AKAMAI_COOKIES<span class="hl-p">.</span><span class="hl-nf">includes</span><span class="hl-p">(</span>name<span class="hl-p">)</span> <span class="hl-o">||</span> <span class="hl-o">/^</span><span class="hl-p">(</span>ak_<span class="hl-o">|</span>bm_<span class="hl-p">)</span><span class="hl-o">/</span><span class="hl-p">.</span><span class="hl-nf">test</span><span class="hl-p">(</span>name<span class="hl-p">)</span><span class="hl-p">;</span></code></pre>
+<p><code>_abck</code> is <code>~</code>-separated. Field 0 is a token, field 1 is the validation state, field 4 carries proof-of-work work items when there are any:</p>
+<pre class="highlight"><code class="lang-text"><span class="hl-m">0</span>: CB2B8A897D7AD42F22A1D62782B68E4F
+<span class="hl-m">1</span>: -<span class="hl-m">1</span>                                   -<span class="hl-m">1</span> unvalidated<span class="hl-p">,</span> <span class="hl-m">0</span> or <span class="hl-m">0</span>= validated
+<span class="hl-m">2</span>: YAAQYwPXF4h8bPefAQAAOYZZBRC…          state blob<span class="hl-p">,</span> re-issued per processed post
+<span class="hl-m">4</span>: -<span class="hl-m">1</span>                                   proof-of-work slot</code></pre>
+<p><code>bm_sz</code> is <code>&lt;token&gt;~&lt;blob&gt;~&lt;int&gt;~&lt;int&gt;</code>, and those two integers are not decoration: the sensor reads segment 2 as its substitution key, falling back to <code>8888888</code> when the cookie is missing or too short. The client is handed its own cipher key by the edge.</p>
+<p><strong>How it is detected:</strong> cookie issuance is not uniform across clients, and the asymmetry is itself the signal. A scripted request with browser-shaped headers and a real browser to the same URL come back with different Akamai cookie sets. Header shape does not explain it, so nothing you do at the header layer fixes it.</p>
+<h2 id="sibling-hosts">Sibling hosts</h2>
+<p>Account and identity hosts are configured harder than the marketing origin. An accounts host can answer a non-browser client <code>403</code> with <code>Server: AkamaiGHost</code> while still setting <code>_abck</code> and <code>bm_sz</code>: that is the edge refusing outright, not a page with a challenge in it. Those hosts, and login POSTs in particular, are where enforcement is real. Homepages typically enforce nothing at all, which is why they are useless as a test.</p>
+<div class="pager"><a class="prev" href="index.html">Overview</a>
+<a class="next" href="configuration.html">Script URL configuration</a></div>
+</main>
+</div>
+<div class="footer-content">
+Measured against live builds. Formats and constants rotate per build; re-measure before relying on any number here.
+</div>
+</body>
+</html>

@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Automation markers - Akamai Bot Manager internals</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">Akamai Bot Manager internals</a>
+  <span class="tagline">Measured notes on the sensor, the payload and the edge</span>
+</header>
+<div class="shell">
+<nav class="sidebar">
+<div class="group"><span class="group-title">Start here</span>
+<ul>
+<li class=""><a href="index.html">Overview</a></li>
+<li class=""><a href="edge-surface.html">Edge surface</a></li>
+<li class=""><a href="configuration.html">Script URL configuration</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The client</span>
+<ul>
+<li class=""><a href="sensor-script.html">The sensor script</a></li>
+<li class=""><a href="collection.html">What the sensor collects</a></li>
+<li class=""><a href="pixel-challenge.html">The pixel challenge</a></li>
+<li class=""><a href="proof-of-work.html">Proof of work</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The payload</span>
+<ul>
+<li class=""><a href="payload-format.html">sensor_data format</a></li>
+<li class=""><a href="build-generations.html">Build generations</a></li>
+<li class=""><a href="field-map.html">Where fields come from</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Detection</span>
+<ul>
+<li class="active"><a href="automation-markers.html">Automation markers</a>
+<ul class="sub"><li><a href="#the-32-bit-mask">The 32-bit mask</a></li><li><a href="#markers-with-their-own-fields">Markers with their own fields</a></li><li><a href="#planting-watinexpressionerror-moves-more-than-one-field">Planting `watinExpressionError` moves more than one field</a></li><li><a href="#what-did-not-move-anything">What did not move anything</a></li><li><a href="#the-mask-is-not-what-gates">The mask is not what gates</a></li></ul></li>
+<li class=""><a href="driven-input.html">Driven input tells</a></li>
+<li class=""><a href="transport.html">Transport fingerprints</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Working with it</span>
+<ul>
+<li class=""><a href="oracles.html">Oracles</a></li>
+<li class=""><a href="rotation.html">What rotates</a></li>
+<li class=""><a href="methodology.html">Methodology</a></li>
+</ul></div>
+</nav>
+<main>
+<h1 id="automation-markers">Automation markers</h1>
+<p>What the payload says about you when a driver is present. Measured by planting one marker before any page script, decoding the first payload, and diffing it against a clean run, with addresses that also move between two identical clean runs dropped as noise.</p>
+<h2 id="the-32-bit-mask">The 32-bit mask</h2>
+<p>Generation 2 reports the whole automation set as one integer at <code>-115[28]</code>. Generation 3 reports it as <code>signals</code>. One bit per marker:</p>
+<table>
+<thead><tr><th>bit</th><th>value</th><th>set by</th></tr></thead>
+<tbody>
+<tr><td>0</td><td>1</td><td><code>window.__nightmare</code></td></tr>
+<tr><td>1</td><td>2</td><td><code>window.cdc_adoQpoasnfa76pfcZLmcfl_Array</code></td></tr>
+<tr><td>2</td><td>4</td><td><code>window.cdc_adoQpoasnfa76pfcZLmcfl_Promise</code></td></tr>
+<tr><td>5</td><td>32</td><td><code>window._Selenium_IDE_Recorder</code></td></tr>
+<tr><td>6</td><td>64</td><td><code>window.__$webdriverAsyncExecutor</code></td></tr>
+<tr><td>7</td><td>128</td><td><code>window.__driver_evaluate</code></td></tr>
+<tr><td>8</td><td>256</td><td><code>window.__driver_unwrapped</code></td></tr>
+<tr><td>9</td><td>512</td><td><code>window.__fxdriver_evaluate</code></td></tr>
+<tr><td>10</td><td>1024</td><td><code>window.__fxdriver_unwrapped</code></td></tr>
+<tr><td>11</td><td>2048</td><td><code>window.__lastWatirAlert</code></td></tr>
+<tr><td>12</td><td>4096</td><td><code>window.__lastWatirConfirm</code></td></tr>
+<tr><td>13</td><td>8192</td><td><code>window.__lastWatirPrompt</code></td></tr>
+<tr><td>14</td><td>16384</td><td><code>window.__phantomas</code></td></tr>
+<tr><td>15</td><td>32768</td><td><code>window.__selenium_evaluate</code></td></tr>
+<tr><td>16</td><td>65536</td><td><code>window.__selenium_unwrapped</code></td></tr>
+<tr><td>17</td><td>131072</td><td><code>window.__webdriverFuncgeb</code></td></tr>
+<tr><td>18</td><td>262144</td><td><code>window.__webdriver__chr</code></td></tr>
+<tr><td>19</td><td>524288</td><td><code>window.__webdriver_evaluate</code></td></tr>
+<tr><td>20</td><td>1048576</td><td><code>window.__webdriver_script_fn</code></td></tr>
+<tr><td>21</td><td>2097152</td><td><code>window.__webdriver_script_func</code></td></tr>
+<tr><td>22</td><td>4194304</td><td><code>window.__webdriver_script_function</code></td></tr>
+<tr><td>23</td><td>8388608</td><td><code>window.__webdriver_unwrapped</code></td></tr>
+<tr><td>24</td><td>16777216</td><td><code>window.awesomium</code></td></tr>
+<tr><td>25</td><td>33554432</td><td><code>window.callSelenium</code></td></tr>
+<tr><td>26</td><td>67108864</td><td><code>window.calledPhantom</code></td></tr>
+<tr><td>27</td><td>134217728</td><td><code>window.calledSelenium</code></td></tr>
+<tr><td>28</td><td>268435456</td><td><code>window.domAutomationController</code></td></tr>
+<tr><td>29</td><td>536870912</td><td><code>window.watinExpressionError</code></td></tr>
+<tr><td>30</td><td>1073741824</td><td><code>window.watinExpressionResult</code></td></tr>
+<tr><td>31</td><td>2147483648</td><td><code>window.spynner_additional_js_loaded</code></td></tr>
+</tbody>
+</table>
+<p>Bits 3 and 4 were not triggered by any marker planted so far, so two names in the build's own list are still unaccounted for. <code>fmget_targets</code> came back as value 2, the same bit as the ChromeDriver <code>_Array</code> name; either it shares a bit or that single run was noise.</p>
+<p>Note that the mask is emitted as a signed 32-bit integer, so bit 31 appears in a payload as <code>-2147483648</code>.</p>
+<h2 id="markers-with-their-own-fields">Markers with their own fields</h2>
+<p>Several things report outside the mask, in more than one place at once:</p>
+<table>
+<thead><tr><th>address (generation 2)</th><th>clean</th><th>tripped by</th></tr></thead>
+<tbody>
+<tr><td><code>-115[29]</code></td><td><code>0</code></td><td><code>navigator.webdriver</code> true</td></tr>
+<tr><td><code>-122[2]</code></td><td><code>0</code></td><td><code>navigator.webdriver</code> true</td></tr>
+<tr><td><code>-122[3]</code></td><td><code>0</code></td><td><code>window.webdriver</code> truthy</td></tr>
+<tr><td><code>-100[9]</code></td><td><code>0</code></td><td><code>window.webdriver</code> truthy</td></tr>
+<tr><td><code>-122[0]</code></td><td><code>0</code></td><td><code>window.$cdc_asdjflasutopfhvcZLmcfl_</code></td></tr>
+<tr><td><code>-100[8]</code></td><td><code>0</code></td><td><code>window._phantom</code></td></tr>
+<tr><td><code>-100[21]</code></td><td><code>cpen:0</code></td><td><code>window.callPhantom</code></td></tr>
+<tr><td><code>-100[7]</code></td><td><code>5</code></td><td><code>navigator.plugins.length</code>, so an emptied array reads <code>0</code></td></tr>
+</tbody>
+</table>
+<p>The generation 3 equivalents are named rather than positional: <code>din.wdr</code> for <code>navigator.webdriver</code>, <code>din.pha</code> for <code>_phantom</code>, <code>din.dau</code> for <code>domAutomation</code>, <code>sde</code> for the <code>$cdc_</code> probes on both <code>window</code> and <code>document</code>, <code>din.npl</code> for the plugin count and <code>din.adp</code> for the marker list.</p>
+<p><strong>How it is detected:</strong> the same fact is reported through two or three independent addresses. Hiding <code>navigator.webdriver</code> while leaving <code>window.webdriver</code> set, or the reverse, produces a payload that contradicts itself, which is a stronger signal than either flag alone.</p>
+<h2 id="planting-watinexpressionerror-moves-more-than-one-field">Planting <code>watinExpressionError</code> moves more than one field</h2>
+<p>One marker in the sweep moved the pointer event log as well as the mask: with it installed, <code>-102</code> went absent and <code>-109</code> gained five fields. That is worth knowing because it means the mask is not the only consequence of a marker, and a diff limited to <code>-115[28]</code> will under-report.</p>
+<h2 id="what-did-not-move-anything">What did not move anything</h2>
+<p><code>window.driver</code>, <code>window.selenium</code>, a patched <code>Function.prototype.toString</code>, a replaced <code>Navigator.prototype.vendor</code> getter, a <code>Proxy</code>-wrapped <code>userAgent</code> getter, a patched <code>navigator.permissions.query</code>, a deleted <code>window.chrome</code>, an emptied <code>navigator.languages</code> and <code>hardwareConcurrency</code> of 1 all produced nothing outside the noise on the property tested.</p>
+<p>Read that carefully. It does not mean those are undetectable. The build holds <code>stripProxyFromErrors</code> and the string <code>at newHandler.&lt;computed&gt; [as apply]</code>, and it calls <code>Function.prototype.toString</code> 34 times per load. It means those checks either report through a field that also moves on its own, or feed a verdict this property never acts on, or run on a path a monitoring configuration does not reach.</p>
+<h2 id="the-mask-is-not-what-gates">The mask is not what gates</h2>
+<p>Setting the automation mask by hand in an otherwise correct payload and sending it to two production endpoints that do gate on the payload: both served the request. One is a login POST that refuses a payload with a moved key, and it serves the same payload with the automation mask set.</p>
+<p>So on the endpoints measured, the payload check is "does this decode into a coherent session", not "does this session admit to being automated". The mask is collected and reported; it is not what the gate reads. That may be scoring rather than gating, and a property configured differently may well act on it.</p>
+<div class="pager"><a class="prev" href="field-map.html">Where fields come from</a>
+<a class="next" href="driven-input.html">Driven input tells</a></div>
+</main>
+</div>
+<div class="footer-content">
+Measured against live builds. Formats and constants rotate per build; re-measure before relying on any number here.
+</div>
+</body>
+</html>

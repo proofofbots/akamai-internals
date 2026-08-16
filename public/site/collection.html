@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What the sensor collects - Akamai Bot Manager internals</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">Akamai Bot Manager internals</a>
+  <span class="tagline">Measured notes on the sensor, the payload and the edge</span>
+</header>
+<div class="shell">
+<nav class="sidebar">
+<div class="group"><span class="group-title">Start here</span>
+<ul>
+<li class=""><a href="index.html">Overview</a></li>
+<li class=""><a href="edge-surface.html">Edge surface</a></li>
+<li class=""><a href="configuration.html">Script URL configuration</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The client</span>
+<ul>
+<li class=""><a href="sensor-script.html">The sensor script</a></li>
+<li class="active"><a href="collection.html">What the sensor collects</a>
+<ul class="sub"><li><a href="#touched-in-a-clean-run">Touched in a clean run</a></li><li><a href="#listeners">Listeners</a></li><li><a href="#named-internals">Named internals</a></li><li><a href="#plugins-are-checked-by-name-not-by-length">Plugins are checked by name, not by length</a></li><li><a href="#proxy-trap-awareness">Proxy-trap awareness</a></li><li><a href="#payload-vocabulary-in-the-table">Payload vocabulary in the table</a></li></ul></li>
+<li class=""><a href="pixel-challenge.html">The pixel challenge</a></li>
+<li class=""><a href="proof-of-work.html">Proof of work</a></li>
+</ul></div>
+<div class="group"><span class="group-title">The payload</span>
+<ul>
+<li class=""><a href="payload-format.html">sensor_data format</a></li>
+<li class=""><a href="build-generations.html">Build generations</a></li>
+<li class=""><a href="field-map.html">Where fields come from</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Detection</span>
+<ul>
+<li class=""><a href="automation-markers.html">Automation markers</a></li>
+<li class=""><a href="driven-input.html">Driven input tells</a></li>
+<li class=""><a href="transport.html">Transport fingerprints</a></li>
+</ul></div>
+<div class="group"><span class="group-title">Working with it</span>
+<ul>
+<li class=""><a href="oracles.html">Oracles</a></li>
+<li class=""><a href="rotation.html">What rotates</a></li>
+<li class=""><a href="methodology.html">Methodology</a></li>
+</ul></div>
+</nav>
+<main>
+<h1 id="what-the-sensor-collects">What the sensor collects</h1>
+<p>Two sources answer this. An environment recorder installed before page scripts says what the sensor actually touched on one clean load, and the recovered string table names everything the build knows how to look for.</p>
+<h2 id="touched-in-a-clean-run">Touched in a clean run</h2>
+<p>Recorded on a desktop Chrome load of a generation 2 property, counting only accesses whose call site is the sensor script:</p>
+<table>
+<thead><tr><th>first seen</th><th>uses</th><th>property</th></tr></thead>
+<tbody>
+<tr><td>1110 ms</td><td>1342</td><td><code>navigator.userAgent</code></td></tr>
+<tr><td>1169 ms</td><td>339</td><td><code>window.innerWidth</code></td></tr>
+<tr><td>1169 ms</td><td>337</td><td><code>window.innerHeight</code></td></tr>
+<tr><td>1170 ms</td><td>329</td><td><code>navigator.language</code></td></tr>
+<tr><td>1170 ms</td><td>975</td><td><code>Math.random</code></td></tr>
+<tr><td>1172 ms</td><td>83</td><td><code>navigator.plugins</code></td></tr>
+<tr><td>1175 ms</td><td>12</td><td><code>navigator.webdriver</code></td></tr>
+<tr><td>1176 ms</td><td>997</td><td><code>document.documentElement</code></td></tr>
+<tr><td>1164 ms</td><td>307</td><td><code>Date.now</code></td></tr>
+<tr><td>1680 ms</td><td>4</td><td><code>screen.colorDepth</code>, <code>screen.pixelDepth</code></td></tr>
+<tr><td>2188 ms</td><td>1</td><td><code>canvas.getContext("webgl")</code></td></tr>
+<tr><td>2190 ms</td><td>2</td><td><code>getParameter(37445)</code> after <code>getExtension("WEBGL_debug_renderer_info")</code></td></tr>
+<tr><td>2191 ms</td><td>2</td><td><code>navigator.connection.rtt</code></td></tr>
+</tbody>
+</table>
+<p>Read a handful of times each: <code>maxTouchPoints</code>, <code>hardwareConcurrency</code> (8), <code>deviceMemory</code> (16), <code>productSub</code>, <code>product</code>, <code>onLine</code>, <code>cookieEnabled</code>, <code>doNotTrack</code>, <code>javaEnabled()</code>, <code>devicePixelRatio</code>, the four <code>screen</code> dimensions, <code>document.hidden</code>, and the existence of <code>credentials</code>, <code>bluetooth</code>, <code>storage</code>, <code>mediaDevices</code>, <code>permissions</code>, <code>serviceWorker</code>, <code>webkitTemporaryStorage</code>, <code>speechSynthesis</code>, <code>indexedDB</code>.</p>
+<p><code>storage.setItem("dummy", "test")</code> runs 23 times, which is a write-availability probe rather than persistence.</p>
+<p><strong>How it is detected:</strong> volume matters as much as value. A patched getter that returns a plausible string is fine; one that is slow, throws after a few hundred calls, or is installed on the instance rather than the prototype, is not. <code>navigator.userAgent</code> is read over a thousand times in a single load.</p>
+<h2 id="listeners">Listeners</h2>
+<p>On <code>document</code>: <code>mousemove</code> and <code>touchmove</code> twice each, then <code>touchstart</code>, <code>touchend</code>, <code>touchcancel</code>, <code>click</code>, <code>mousedown</code>, <code>mouseup</code>, <code>pointerdown</code>, <code>pointerup</code>, <code>keydown</code>, <code>keyup</code>, <code>keypress</code>, <code>visibilitychange</code>. On <code>window</code>: <code>deviceorientation</code>, <code>devicemotion</code>, <code>blur</code>, <code>focus</code>.</p>
+<p>Each of those handlers feeds counters that end up in the payload as named fields, so an event log and its counters have to move together. <a href="field-map.html">Where fields come from</a> names which event drives which field.</p>
+<h2 id="named-internals">Named internals</h2>
+<p>The build's own vocabulary, recovered from the string table:</p>
+<p><code>buildPostData</code>, <code>calculateFP</code>, <code>getDeviceData</code>, <code>get_telemetry</code>, <code>collectHeadlessSignals</code>, <code>collectSeleniumData</code>, <code>checkIprSignals</code>, <code>calcSynthesisSpeechHash</code>, <code>synthesisSpeechHash</code>, <code>getHeartbeatTimestamp</code>, <code>extractAbckHeartbeatTimestamp</code>, <code>storeWebWideTrackingException</code>, <code>stripProxyFromErrors</code>, <code>setBraveSignal</code>, <code>getStorageUpdates</code>, <code>processAutopostRes</code>, <code>listFunctions</code>, <code>applyFunc</code>, <code>mouseMoveData</code>, <code>deltaTimestamp</code>, <code>totVel</code>, <code>stackLen</code>, <code>webGLVendor</code>, <code>webGLRenderer</code>, <code>webGLInfo</code>, <code>pluginsTest</code>, <code>pluginsLength</code>, <code>navigatorPermissions</code>, <code>navPerm</code>, <code>fpValStr</code>, <code>fpValCalculated</code>, <code>rCFP</code>, <code>powDone</code>, <code>_setPowState</code>, <code>_setIpr</code>, <code>_sdTrace</code>, <code>aprApTimer</code>, <code>aprApInFlight</code>, <code>failedAprApCnt</code>, <code>failedAprApBackoff</code>, <code>lastAprAutopostTS</code>.</p>
+<p><code>powDone</code> and <code>_setPowState</code> next to <code>_abck</code> and <code>bm_sz</code> are why the proof-of-work client is inside the sensor rather than being a separate script.</p>
+<h2 id="plugins-are-checked-by-name-not-by-length">Plugins are checked by name, not by length</h2>
+<p>The build carries around thirty legacy plugin names (<code>Shockwave Flash</code>, <code>Chrome PDF Viewer</code>, <code>Silverlight Plug-In</code>, <code>QuickTime Plug-in</code>, <code>Java Applet Plug-in</code>, <code>Widevine Content Decryption Module</code> and more) and looks each one up on the plugin array, emitting the index of each hit. A desktop Chrome emits <code>,7</code> for the PDF viewer.</p>
+<p>Separately it reports <code>navigator.plugins.length</code> in its own field, and carries browser tells like <code>brave</code>, <code>brave_brws</code>, <code>opera</code>, <code>InstallTrigger</code> and <code>Trident/5.0</code> through <code>Trident/7.0</code>.</p>
+<p><strong>How it is detected:</strong> the two plugin fields have to agree. An emptied plugin array drops the length field to 0 and empties the hit list, which no real Chrome does; faking the length without faking named lookup fails the other half.</p>
+<h2 id="proxy-trap-awareness">Proxy-trap awareness</h2>
+<p><code>stripProxyFromErrors</code>, and the string <code>at newHandler.&lt;computed&gt; [as apply]</code>, are aimed at <code>Proxy</code>-based patching: the script reads error stacks looking for the frame a trap leaves behind.</p>
+<p><strong>How it is detected:</strong> any instrumentation built on <code>Proxy</code> is visible to this check, including the recorders used to study the script. A run made with a proxy-based recorder is not a clean baseline, and treating it as one poisons every comparison made against it.</p>
+<h2 id="payload-vocabulary-in-the-table">Payload vocabulary in the table</h2>
+<p>Field markers appear verbatim in the string table: <code>,cpen:</code>, <code>,loc:</code>, <code>,s1:</code>, <code>,uaend,</code>, <code>bat:</code>, <code>cwen:</code>, <code>dm:</code>, <code>fc:</code>, <code>i1:</code>, <code>isc:</code>, <code>non:</code>, <code>opc:</code>, <code>sc:</code>, <code>vib:</code>, <code>wrc:</code>, <code>x11:</code>, <code>x12:</code>, alongside <code>&lt;bpd&gt;</code>, <code>&lt;/bpd&gt;</code>, <code>&lt;init/&gt;</code> and the POST body template <code>{"sensor_data":"</code>. A run of negative integers from <code>-70</code> to <code>-134</code> is the section-code table for the generation 2 plaintext.</p>
+<div class="pager"><a class="prev" href="sensor-script.html">The sensor script</a>
+<a class="next" href="pixel-challenge.html">The pixel challenge</a></div>
+</main>
+</div>
+<div class="footer-content">
+Measured against live builds. Formats and constants rotate per build; re-measure before relying on any number here.
+</div>
+</body>
+</html>
